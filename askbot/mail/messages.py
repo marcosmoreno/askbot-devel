@@ -2,23 +2,19 @@
 of email messages for various occasions
 """
 import askbot
-import functools
 import logging
-import urllib
+import urllib.request, urllib.parse, urllib.error
 from copy import copy
 from django.conf import settings as django_settings
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.template import Context
 from django.template.loader import get_template
-from django.utils.encoding import force_unicode
+from django.utils.encoding import force_str
 from django.utils.html import mark_safe
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from askbot import const
 from askbot.conf import settings as askbot_settings
-from askbot.utils import html as html_utils
-from askbot.utils.diff import textDiff as htmldiff
-from askbot.utils.html import (absolutize_urls, sanitize_html, site_link, site_url)
-from askbot.utils.slug import slugify
+from askbot.utils.html import (absolutize_urls, site_link, site_url)
 
 LOG = logging.getLogger(__name__)
 
@@ -127,7 +123,7 @@ class BaseEmail(object):
 
         context = copy(self.get_context(context)) #copy context
         for key in context:
-            if isinstance(context[key], basestring):
+            if isinstance(context[key], str):
                 context[key] = mark_safe(context[key])
 
         return ' '.join(template.render(Context(context)).split())
@@ -152,7 +148,7 @@ class BaseEmail(object):
         else:
             LOG.warning(
                 'Attempting to send disabled email "%s"',
-                force_unicode(self.title)
+                force_str(self.title)
             )
 
 
@@ -346,7 +342,7 @@ class InstantEmailAlert(BaseEmail):
         update_activity = context.get('update_activity')
         update_type = self.get_update_type(update_activity)
 
-        #unhandled update_type 'post_shared' 
+        #unhandled update_type 'post_shared'
         #user_action = _('%(user)s shared a %(post_link)s.')
 
         origin_post = post.get_origin_post()
@@ -355,7 +351,7 @@ class InstantEmailAlert(BaseEmail):
         can_reply = to_user.can_post_by_email()
         from askbot.models import get_reply_to_addresses
         reply_address, alt_reply_address = get_reply_to_addresses(to_user, post)
-        alt_reply_subject = urllib.quote(('Re: ' + post.thread.title).encode('utf-8'))
+        alt_reply_subject = urllib.parse.quote(('Re: ' + post.thread.title).encode('utf-8'))
 
         return {
            'admin_email': askbot_settings.ADMIN_EMAIL,
@@ -561,6 +557,14 @@ class RejectedPost(BaseEmail):
         return context
 
 
+class AccountManagementRequest(BaseEmail):
+    template_path = 'email/account_management_request'
+    title = _('Account management request')
+    description = _('Sent when user wants to cancel account or download data')
+    mock_contexts = ({'message': 'User Bob, id=52 asked to export personal data.',
+                      'username': 'Bob'},)
+
+
 class ModerationQueueNotification(BaseEmail):
     template_path = 'email/moderation_queue_notification'
     title = _('Moderation queue has items')
@@ -620,7 +624,7 @@ class BatchEmailAlert(BaseEmail):
         qq = Post.objects.filter(post_type='question')[:2]
 
         act_list = list()
-        act_list.append(force_unicode(_('new question')))
+        act_list.append(force_str(_('new question')))
         format_action_count('%(num)d rev', 3, act_list)
         format_action_count('%(num)d ans', 2, act_list)
         qdata.append({
@@ -695,21 +699,33 @@ class UnansweredQuestionsReminder(BaseEmail):
         }
 
 
-class EmailValidation(BaseEmail):
-    template_path = 'authopenid/email_validation'
-    title = _('Email validation')
-    description = _('Sent when user validates email or recovers account')
-    mock_contexts = ({
-        'key': 'a4umkaeuaousthsth',
-        'handler_url_name': 'user_account_recover',
-    },)
+class AccountActivation(BaseEmail):
+    template_path = 'authopenid/account_activation'
+    title = _('Account activation')
+    description = _('Sent when user creates account, contains email validation link')
+    mock_contexts = ({'key': 'a4umkaeuaousthsth'},)
 
     def process_context(self, context):
-        url_name = context['handler_url_name']
         context.update({
             'site_name': askbot_settings.APP_SHORT_NAME,
             'recipient_user': None,#needed for the Django template
-            'validation_link': site_url(reverse(url_name)) + \
+            'validation_link': site_url(reverse('verify_email_and_register')) + \
+                                '?validation_code=' + context['key']
+        })
+        return context
+
+
+class AccountRecovery(BaseEmail):
+    template_path = 'authopenid/account_recovery'
+    title = _('Account recovery')
+    description = _('Sent when user needs to recover login')
+    mock_contexts = ({'key': 'a4umkaeuaousthsth'},)
+
+    def process_context(self, context):
+        context.update({
+            'site_name': askbot_settings.APP_SHORT_NAME,
+            'recipient_user': None,#needed for the Django template
+            'validation_link': site_url(reverse('user_account_recover')) + \
                                 '?validation_code=' + context['key']
         })
         return context
@@ -786,7 +802,7 @@ class ApprovedPostNotificationRespondable(BaseEmail):
 
     def process_context(self, context):
         revision = context['revision']
-        prompt = force_unicode(_('To add to your post EDIT ABOVE THIS LINE'))
+        prompt = force_str(_('To add to your post EDIT ABOVE THIS LINE'))
         context.update({
             'site_name': askbot_settings.APP_SHORT_NAME,
             'post': revision.post,
@@ -797,33 +813,21 @@ class ApprovedPostNotificationRespondable(BaseEmail):
         return context
 
 
-class GroupMessagingEmailAlert(BaseEmail):
-    template_path = 'group_messaging/email_alert'
-    title = _('Private message notification')
-    description = _('Sent when a private message is sent to the user')
-    preview_error_message = _(
-        'At least one user and one personal message are required to '
-        'generate a preview'
-    )
+class EmailChangeVerification(BaseEmail):
+    template_path = 'email/email_change_verification'
+    title = _('Email change verification')
+    description = _('Sent when a user changes their email address, to verify the new address')
+    mock_contexts = ({'key': 'a4umkaeuaousthsth'},)
 
-    def is_enabled(self):
-        from askbot.deps.group_messaging.models import Message
-        if Message.objects.count() == 0:
-            return False
-        return askbot_settings.ENABLE_EMAIL_ALERTS \
-            and askbot_settings.GROUP_MESSAGING_EMAIL_ALERT_ENABLED
+    def process_context(self, context):
+        context.update({
+            'site_name': askbot_settings.APP_SHORT_NAME,
+            'recipient_user': None,
+            'validation_link': site_url(reverse('verify_email_change')) + \
+                                '?validation_code=' + context['key']
+        })
+        return context
 
-    def get_mock_context(self):
-        from askbot.deps.group_messaging.models import Message
-        messages = Message.objects.all().order_by('-id')
-        if messages.count() == 0:
-            return None
-        message = messages[0]
-        return {
-            'messages': message.get_timeline(),
-            'message': message,
-            'recipient_user': get_user()
-        }
 
 class FeedbackEmail(BaseEmail):
     template_path = 'email/feedback'

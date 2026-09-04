@@ -6,61 +6,56 @@ basic actions on behalf of the forum application
 """
 import os
 import platform
+import sys
+import traceback
 
-VERSION = (0, 10, 2)
-
-default_app_config = 'askbot.apps.AskbotConfig'
+VERSION = (0, 13, 0)
 
 #keys are module names used by python imports,
 #values - the package qualifier to use for pip
 REQUIREMENTS = {
-    'appconf': 'django-appconf',
-    'akismet': 'akismet<=0.2.0',
-    'avatar': 'django-avatar==2.2.1',
-    'bs4': 'beautifulsoup4<=4.4.1',
-    'coffin': 'Coffin>=0.3,<=0.3.8',
-    'compressor': 'django-compressor>=1.3,<=1.5',
-    'django': 'django>=1.8,<1.9',
-    'django_countries': 'django-countries==3.3',
-    'djcelery': 'django-celery>=3.0.11,<=3.1.17',
-    'celery': 'celery==3.1.18',
-    'djkombu': 'django-kombu==0.9.4',
-    'followit': 'django-followit==0.2.1',
-    'html5lib': 'html5lib==0.9999999',
-    'jinja2': 'Jinja2==2.8',
-    'jsonfield': 'jsonfield<=1.0.3',
-    'jwt': 'pyjwt<=1.4.0',
-    'keyedcache': 'django-keyedcache<=1.5.1',
-    'markdown2': 'markdown2<=2.3.1',
-    'mock': 'mock==1.0.1',
+    'aiohttp': 'aiohttp<4.0',
+    'appconf': 'django-appconf>=1.2',
+    'akismet': 'akismet==1.0.1',
+    'avatar': 'django-avatar>=9.0',
+    'bleach': 'bleach==5.0.1',
+    'bs4': 'beautifulsoup4<=4.7.1',
+    'compressor': 'django-compressor>=4.6,<5',
+    'celery': 'celery>=5.5,<6',
+    'django': 'django>=4.2,<5.3',
+    'django_countries': 'django-countries>=8.2',
+    'django_jinja': 'django-jinja>=2.11,<3',
+    'django_ratelimit': 'django-ratelimit>=4.1,<5.0',
+    'followit': 'django-followit==0.7.0',
+    'html5lib': 'html5lib==1.1',
+    'jinja2': 'Jinja2>=3.1,<4',
+    'jinja2_simple_tags': 'jinja2-simple-tags>=0.6,<1',
+    'jsonfield': 'jsonfield>=2.0.0',
+    'jwt': 'pyjwt>=2.10,<3',
+    'keyedcache': 'django-keyedcache3>=1.5.1',
+    'livesettings': 'django-livesettings3>=1.7.0,<2',
+    'linkify_it': 'linkify-it-py==2.0.2',
+    'markdown_it': 'markdown-it-py==4.0.0',
+    'markupsafe': 'markupsafe',
+    'mdit_py_plugins': 'mdit-py-plugins==0.5.0',
+    'pygments': 'pygments>=2.15.0',
+    'mock': 'mock==3.0.5',
     'oauth2': 'oauth2<=1.9.0.post1',
-    'openid': 'python-openid<=2.2.5',
-    'picklefield': 'django-picklefield==0.3.0',
-    'pystache': 'pystache==0.3.1',
-    'pytz': 'pytz<=2016.4',
-    'captcha': 'django-recaptcha>=1.0.3,<=1.0.5',
-    'cas': 'python-cas==1.1.0',
-    'requirements': 'requirements-parser==0.1.0',
-    'robots': 'django-robots==1.1',
+    'openid': 'python-openid2>=3.0',
+    'picklefield': 'django-picklefield>=3.2,<4',
+    'django_recaptcha': 'django-recaptcha>=4.1,<5',
+    'cas': 'python-cas>=1.4.0,<1.7',
+    'premailer': 'premailer==3.10.0',
+    'psycopg2': 'psycopg2-binary>=2.9.6',
+    'okta_jwt_verifier': 'okta-jwt-verifier==0.2.3',
+    'responses': 'responses>=0.9.0,<=0.23.1',
+    'requests_oauthlib': 'requests-oauthlib>=1.2.0',
+    'requirements': 'requirements-parser>=0.2.0',
     'regex': 'regex',
-    'sanction': 'sanction==0.3.1',
-    'simplejson': 'simplejson<=3.8.2',
-    'threaded_multihost': 'django-threaded-multihost<=1.4-1',
-    'tinymce': 'django-tinymce==1.5.3',
-    'unidecode': 'unidecode<=0.4.19',
-    #'stopforumspam': 'stopforumspam'
+    'tldextract': 'tldextract==5.1.2',
+    'unidecode': 'unidecode',
+    'urllib3': 'urllib3>=2,<3'
 }
-
-#necessary for interoperability of django and coffin
-try:
-    from askbot import patches
-    from askbot.deployment.assertions import assert_package_compatibility
-    assert_package_compatibility()
-    patches.patch_django()
-    patches.patch_coffin()  # must go after django
-except ImportError:
-    pass
-
 
 def get_install_directory():
     """returns path to directory
@@ -70,14 +65,14 @@ def get_install_directory():
     return os.path.dirname(__file__)
 
 
-def get_path_to(relative_path):
+def get_askbot_module_path(relative_path):
     """returns absolute path to a file
     relative to ``askbot`` directory
     ``relative_path`` must use only forward slashes
     and must not start with a slash
     """
     root_dir = get_install_directory()
-    assert(relative_path[0] != 0)
+    assert relative_path[0] != 0
     path_bits = relative_path.split('/')
     return os.path.join(root_dir, *path_bits)
 
@@ -91,31 +86,19 @@ def get_version():
 
 def get_database_engine_name():
     """returns name of the database engine,
-    independently of the version of django
-    - for django >=1.2 looks into ``settings.DATABASES['default']``,
-    (i.e. assumes that askbot uses database named 'default')
-    , and for django 1.1 and below returns settings.DATABASE_ENGINE
+    independently of the version of django.
+    This was required for the django 1.0 -> 1.1 migration
     """
-    import django
-    from django.conf import settings as django_settings
-    major_version = django.VERSION[0]
-    minor_version = django.VERSION[1]
-    if major_version == 1:
-        if minor_version > 1:
-            return django_settings.DATABASES['default']['ENGINE']
-        else:
-            return django_settings.DATABASE_ENGINE
+    from django.conf import settings as django_settings #pylint: disable=import-outside-toplevel
+    return django_settings.DATABASES['default']['ENGINE']
 
 
 def get_lang_mode():
-    from django.conf import settings as django_settings
+    from django.conf import settings as django_settings #pylint: disable=import-outside-toplevel
     try:
         return django_settings.ASKBOT_LANGUAGE_MODE
-        return getattr(django_settings, 'ASKBOT_LANGUAGE_MODE', 'single-lang')
-    except:
-        import traceback
+    except AttributeError:
         traceback.print_stack()
-        import sys
         sys.exit()
 
 

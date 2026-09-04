@@ -2,6 +2,7 @@
 it to another, all corresponding questions are automatically
 retagged
 """
+
 import sys
 from django.conf import settings as django_settings
 from django.core import management
@@ -15,7 +16,7 @@ def get_admin(seed_user_id = None):
     """
     try:
         admin = api.get_admin(seed_user_id=seed_user_id)
-    except models.User.DoesNotExist, e:
+    except models.User.DoesNotExist as e:
         raise CommandError(e)
 
     if admin.id != seed_user_id:
@@ -29,13 +30,12 @@ would you like to select default moderator %s, id=%d
 to run this operation?""" % (seed_user_id, admin.username, admin.id)
         choice = console.choice_dialog(prompt, choices = ('yes', 'no'))
         if choice == 'no':
-            print 'Canceled'
+            print('Canceled')
             sys.exit()
     return admin
 
 def parse_tag_names(input):
-    decoded_input = input.decode(sys.stdin.encoding)
-    return set(decoded_input.strip().split(' '))
+    return set(console.decode_input(input).split(' '))
 
 def format_tag_ids(tag_list):
     return ' '.join([str(tag.id) for tag in tag_list])
@@ -89,6 +89,12 @@ ask you to confirm your action before making changes.
             default=django_settings.LANGUAGE_CODE,
             help='language code for the tags to rename e.g. "en"'
         )
+        parser.add_argument('--is_force',
+                            action='store_true',
+                            dest='is_force',
+                            default=False,
+                            help='force the issue'
+                           )
 
     def handle(self, *args, **options):
         """command handle function. reads tag names, decodes
@@ -110,7 +116,7 @@ ask you to confirm your action before making changes.
 
         in_both = from_tag_names & to_tag_names
         if in_both:
-            in_both_str = u' '.join(in_both)
+            in_both_str = ' '.join(in_both)
             if len(in_both) > 1:
                 error_message = 'Tags %s appear to be ' % in_both_str
             else:
@@ -126,7 +132,7 @@ ask you to confirm your action before making changes.
                                 )
                 from_tags.append(tag)
         except models.Tag.DoesNotExist:
-            error_message = u"""tag %s was not found. It is possible that the tag
+            error_message = """tag %s was not found. It is possible that the tag
 exists but we were not able to match it's unicode value
 or you may have misspelled the tag. Please remember that
 tag names are case sensitive.
@@ -135,7 +141,7 @@ Also, you can try command "rename_tag_id"
 """ % tag_name
             raise CommandError(error_message)
         except models.Tag.MultipleObjectsReturned:
-            raise CommandError(u'found more than one tag named %s' % tag_name)
+            raise CommandError('found more than one tag named %s' % tag_name)
 
         admin = get_admin(seed_user_id = options['user_id'])
 
@@ -156,7 +162,7 @@ Also, you can try command "rename_tag_id"
                     )
                 )
             except models.Tag.MultipleObjectsReturned:
-                raise CommandError(u'found more than one tag named %s' % tag_name)
+                raise CommandError('found more than one tag named %s' % tag_name)
         options['user_id'] = admin.id
         options['from'] = format_tag_ids(from_tags)
         options['to'] = format_tag_ids(to_tags)

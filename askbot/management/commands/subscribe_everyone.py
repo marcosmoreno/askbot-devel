@@ -1,14 +1,15 @@
-from django.core.management.base import NoArgsCommand
+
+from django.core.management import BaseCommand
 from django.db import connection
 from askbot.models import EmailFeedSetting, User
 
-class Command(NoArgsCommand):
-    def handle_noargs(self, **options):
+class Command(BaseCommand):
+    def handle(self, **options):
         try:
             try:
                 self.subscribe_everyone()
-            except Exception, e:
-                print e
+            except Exception as e:
+                print(e)
         finally:
             connection.close()
 

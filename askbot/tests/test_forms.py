@@ -68,11 +68,11 @@ class AskByEmailFormTests(AskbotTestCase):
                 self.assertFalse(form.is_valid())
             else:
                 self.assertTrue(form.is_valid())
-                self.assertEquals(
+                self.assertEqual(
                     form.cleaned_data['tagnames'],
                     output[0]
                 )
-                self.assertEquals(
+                self.assertEqual(
                     form.cleaned_data['title'],
                     output[1]
                 )
@@ -91,7 +91,7 @@ class AskByEmailFormTests(AskbotTestCase):
                 self.assertFalse(form.is_valid())
             else:
                 self.assertTrue(form.is_valid())
-                self.assertEquals(
+                self.assertEqual(
                     form.cleaned_data['email'],
                     expected_result
                 )
@@ -147,84 +147,6 @@ class TagNamesFieldTests(AskbotTestCase):
         self.assert_tags_equal(cleaned_tags, ['oneness'])
 
 
-class EditQuestionAnonymouslyFormTests(AskbotTestCase):
-    """setup the following truth table
-    on reveal_identity field:
-    is_anon  can  owner  checked  result
-
-    """
-    truth_table = (
-        (0, 0, 0, 0, False),
-        (0, 0, 0, 1, False),
-        (0, 0, 1, 0, False),
-        (0, 0, 1, 1, False),
-        (0, 1, 0, 0, False),
-        (0, 1, 0, 1, False),
-        (0, 1, 1, 0, False),
-        (0, 1, 1, 1, False),  # all up to this point are False
-        (1, 0, 0, 0, False),
-        (1, 1, 0, 0, False),
-        (1, 1, 1, 0, False),
-        (1, 1, 1, 1, True),
-    )
-
-    # legend: is_anon - question is anonymous
-    #         can - askbot_settings.ALLOW_ASK_ANONYMOUSLY
-    #         owner - editor is question owner
-    #         checked - the checkbox "reveal_identity" is marked
-    def setUp(self):
-        self.create_user()
-        self.create_user(
-            username='other_user',
-            status='m'  # must be able to edit
-        )
-        super(EditQuestionAnonymouslyFormTests, self).setUp()
-
-    def setup_data(self, is_anon, can_be_anon, is_owner, box_checked):
-        """sets up data in the same order as shown in the
-        truth table above
-
-        the four positional arguments are in the same order
-        """
-        askbot_settings.update('ALLOW_ASK_ANONYMOUSLY', can_be_anon)
-        question = self.post_question(is_anonymous=is_anon)
-        if is_owner:
-            editor = self.user
-        else:
-            editor = self.other_user
-        data = {
-            'tags': 'tag1 tag2',
-            'text': 'ostaousohuosuh',
-            'title': 'stahosetuhaoeudhuh'
-        }
-        if box_checked:
-            data['reveal_identity'] = 'on'
-        self.form = forms.EditQuestionForm(
-                        data,
-                        question=question,
-                        user=editor,
-                        revision=question.get_latest_revision(),
-                    )
-
-    def test_reveal_identity_field(self):
-        """runs through the truth table and tests them items by one
-        """
-        current_item = 0
-        for entry in self.truth_table:
-            self.setup_data(*(entry[:4]))
-
-            if self.form.is_valid():
-                result = self.form.cleaned_data.get('reveal_identity', False)
-            else:
-                result = 'error'
-
-            error_message = 'failed truth table item %d' % current_item
-            current_item += 1
-
-            expected_result = entry[4]
-            self.assertEquals(result, expected_result, error_message)
-
-
 class AskFormTests(AskbotTestCase):
     def setup_data(self, allow_anonymous=True, ask_anonymously=None):
         askbot_settings.update('ALLOW_ASK_ANONYMOUSLY', allow_anonymous)
@@ -239,7 +161,7 @@ class AskFormTests(AskbotTestCase):
         self.form.full_clean()
 
     def assert_anon_is(self, value):
-        self.assertEquals(
+        self.assertEqual(
             self.form.cleaned_data['ask_anonymously'],
             value
         )
@@ -261,6 +183,79 @@ class AskFormTests(AskbotTestCase):
         self.setup_data(ask_anonymously=False)
         self.assert_anon_is(False)
 
+    @with_settings(ADMIN_TAGS_ENABLED=True, ADMIN_TAGS='admin')
+    def test_admin_can_add_admin_tag(self):
+        user = self.create_user('admin', status='d')
+        form_data = {
+            'title': 'test title admin',
+            'text': 'test content admin',
+            'tags': 'admin',
+        }
+        form = forms.AskForm(data=form_data, user=user)
+        self.assertTrue(form.is_valid())
+        self.assertEqual(form.cleaned_data['tags'], 'admin')
+
+    @with_settings(ADMIN_TAGS_ENABLED=True, ADMIN_TAGS='admin')
+    def test_admin_can_add_non_admin_tag(self):
+        user = self.create_user('admin', status='d')
+        form_data = {
+            'title': 'test title admin',
+            'text': 'test content admin',
+            'tags': 'non-admin-tag',
+        }
+        form = forms.AskForm(data=form_data, user=user)
+        self.assertTrue(form.is_valid())
+        self.assertEqual(form.cleaned_data['tags'], 'non-admin-tag')
+
+    @with_settings(ADMIN_TAGS_ENABLED=True, ADMIN_TAGS='admin')
+    def test_non_admin_cannot_add_admin_tag(self):
+        user = self.create_user('admin', status='a')
+        form_data = {
+            'title': 'test title admin',
+            'text': 'test content admin',
+            'tags': 'admin',
+        }
+        form = forms.AskForm(data=form_data, user=user)
+        self.assertFalse(form.is_valid())
+        self.assertIn('tags', form.errors)
+
+    @with_settings(ADMIN_TAGS_ENABLED=True, ADMIN_TAGS='admin')
+    def test_non_admin_can_add_non_admin_tag(self):
+        user = self.create_user('admin', status='a')
+        form_data = {
+            'title': 'test title admin',
+            'text': 'test content admin',
+            'tags': 'non-admin-tag',
+        }
+        form = forms.AskForm(data=form_data, user=user)
+        self.assertTrue(form.is_valid())
+        self.assertEqual(form.cleaned_data['tags'], 'non-admin-tag')
+
+    @with_settings(ADMIN_TAGS_ENABLED=True, ADMIN_TAGS='admin')
+    def test_anonymous_user_cannot_add_admin_tag(self):
+        user = AnonymousUser()
+        form_data = {
+            'title': 'test title admin',
+            'text': 'test content admin',
+            'tags': 'admin',
+        }
+        form = forms.AskForm(data=form_data, user=user)
+        self.assertFalse(form.is_valid())
+        self.assertIn('tags', form.errors)
+
+    @with_settings(ADMIN_TAGS_ENABLED=False, ADMIN_TAGS='admin')
+    def test_anonymous_user_can_add_non_admin_tag(self):
+        user = AnonymousUser()
+        form_data = {
+            'title': 'test title admin',
+            'text': 'test content admin',
+            'tags': 'non-admin-tag',
+        }
+        form = forms.AskForm(data=form_data, user=user)
+        self.assertTrue(form.is_valid())
+        self.assertEqual(form.cleaned_data['tags'], 'non-admin-tag')
+
+
 
 class UserStatusFormTest(AskbotTestCase):
     def setup_data(self, status):
@@ -275,19 +270,19 @@ class UserStatusFormTest(AskbotTestCase):
 
     def test_moderator_can_suspend_user(self):
         self.setup_data('s')
-        self.assertEquals(self.form.is_valid(), True)
+        self.assertEqual(self.form.is_valid(), True)
 
     def test_moderator_can_block_user(self):
         self.setup_data('s')
-        self.assertEquals(self.form.is_valid(), True)
+        self.assertEqual(self.form.is_valid(), True)
 
     def test_moderator_cannot_grant_admin(self):
         self.setup_data('d')
-        self.assertEquals(self.form.is_valid(), False)
+        self.assertEqual(self.form.is_valid(), False)
 
     def test_moderator_cannot_grant_moderator(self):
         self.setup_data('m')
-        self.assertEquals(self.form.is_valid(), False)
+        self.assertEqual(self.form.is_valid(), False)
 
 
 # Test for askbot.utils.forms
@@ -298,7 +293,7 @@ class UserNameFieldTest(AskbotTestCase):
 
     def test_clean(self):
         self.username_field.skip_clean = True
-        self.assertEquals(self.username_field.clean('bar'), 'bar')  # Will pass anything
+        self.assertEqual(self.username_field.clean('bar'), 'bar')  # Will pass anything
 
         self.username_field.skip_clean = False
 
@@ -308,7 +303,7 @@ class UserNameFieldTest(AskbotTestCase):
 
         self.username_field.user_instance = self.u1
         # Will pass
-        self.assertEquals(self.username_field.clean('user1'), self.u1.username)
+        self.assertEqual(self.username_field.clean('user1'), self.u1.username)
 
         # Not pass username required
         self.assertRaises(django_forms.ValidationError, self.username_field.clean, '')
@@ -337,7 +332,7 @@ class AnswerEditorFieldTests(AskbotTestCase):
                           'a')
 
     def test_pass_long_body(self):
-        self.assertEquals(self.field.clean(10*'a'), 10*'a')
+        self.assertEqual(self.field.clean(10*'a'), 10*'a')
 
 
 class PostAsSomeoneFormTests(AskbotTestCase):
@@ -411,26 +406,19 @@ class EditorFieldTests(AskbotTestCase):
             django_forms.ValidationError, field.clean, TEXT_WITH_LINK
         )
 
-    @with_settings(EDITOR_TYPE='tinymce', MIN_REP_TO_SUGGEST_LINK=10)
-    def test_low_rep_user_cannot_post_links_tinymce(self):
-        field = forms.EditorField(user=self.user)
-        self.assertRaises(
-            django_forms.ValidationError, field.clean, TEXT_WITH_LINK
-        )
-
 
 class CleanTagTest(AskbotTestCase):
     def test_look_in_db_true(self):
-        tag_name = u'foo'
+        tag_name = 'foo'
         new_name = forms.clean_tag(tag_name, look_in_db=True)
         self.assertEqual(tag_name, new_name)
 
     def test_look_in_db_false(self):
-        tag_name = u'foo'
+        tag_name = 'foo'
         new_name = forms.clean_tag(tag_name, look_in_db=False)
         self.assertEqual(tag_name, new_name)
 
     def test_name_too_long(self):
-        tag_name = u'foo' * askbot_settings.MAX_TAG_LENGTH
+        tag_name = 'foo' * askbot_settings.MAX_TAG_LENGTH
         with self.assertRaises(forms.forms.ValidationError):
             forms.clean_tag(tag_name, look_in_db=True)

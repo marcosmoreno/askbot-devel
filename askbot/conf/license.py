@@ -1,10 +1,10 @@
 """settings that allow changing of the license
 clause used in askbot instances"""
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from askbot import const
 from askbot.conf.settings_wrapper import settings
 from askbot.conf.super_groups import CONTENT_AND_UI
-from askbot.deps import livesettings
+from livesettings import values as livesettings
 from askbot.skins import utils as skin_utils
 
 LICENSE_SETTINGS = livesettings.ConfigurationGroup(
@@ -58,24 +58,5 @@ settings.register(
             'URL of the official page with all the license legal clauses'
         ),
         default=const.DEPENDENCY_URLS['cc-by-sa']
-    )
-)
-
-settings.register(
-    livesettings.BooleanValue(
-        LICENSE_SETTINGS,
-        'LICENSE_USE_LOGO',
-        description=_('Use license logo'),
-        default=True
-    )
-)
-
-settings.register(
-    livesettings.ImageValue(
-        LICENSE_SETTINGS,
-        'LICENSE_LOGO_URL',
-        description=_('License logo image'),
-        default='/images/cc-by-sa.png',
-        url_resolver=skin_utils.get_media_url
     )
 )

@@ -1,35 +1,35 @@
 import unittest
 from askbot.utils import category_tree as ct
-import simplejson
+import json
 
 class CategoryTreeTests(unittest.TestCase):
     def setUp(self):
         self.tree = [
             [
-                u'dummy', [#dummy is a sentinel node
+                'dummy', [#dummy is a sentinel node
                     [
-                        u'cars', [
-                            [u'volkswagen', []],
-                            [u'zhiguli', []]
+                        'cars', [
+                            ['volkswagen', []],
+                            ['zhiguli', []]
                         ]
                     ],
                     [
-                        u'cats', [
-                            [u'meow', []],
-                            [u'tigers', [
-                                        [u'rrrr', []]
+                        'cats', [
+                            ['meow', []],
+                            ['tigers', [
+                                        ['rrrr', []]
                                     ]
                             ]
                         ]
                     ],
                     [
-                        u'music', [
-                            [u'play', [
-                                [u'loud', []]]
+                        'music', [
+                            ['play', [
+                                ['loud', []]]
                             ],
-                            [u'listen', []],
-                            [u'buy', []],
-                            [u'download', []]
+                            ['listen', []],
+                            ['buy', []],
+                            ['download', []]
                         ]
                     ]
                 ]
@@ -47,6 +47,17 @@ class CategoryTreeTests(unittest.TestCase):
             ct.has_category(self.tree, 'cars'),
             True
         )
+
+    def test_insert_duplicate_category_raises(self):
+        self.assertRaises(ValueError, ct.add_category, self.tree, 'cars', [0, 2, 3])
+
+    def test_rename_to_existing_category_raises(self):
+        self.assertRaises(ValueError,
+                          ct.rename_category,
+                          self.tree, 
+                          from_name='cars',
+                          to_name='cats',
+                          path=[0, 2, 3])
 
     def test_deep_level_subcat_is_there(self):
         self.assertEqual(
@@ -109,7 +120,7 @@ class CategoryTreeTests(unittest.TestCase):
             ]
         ]
         sorted_data = ct.sort_tree(unsorted_data)
-        sorted_dump = simplejson.dumps(sorted_data)
+        sorted_dump = json.dumps(sorted_data)
         self.assertEqual(
             sorted_dump,
             '[["dummy", [["audio", [["amadeus", []], ["mp3", []]]], ["cars", []]]]]'

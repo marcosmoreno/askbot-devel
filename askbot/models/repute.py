@@ -1,13 +1,13 @@
 import datetime
 
 from django.contrib.contenttypes.models import ContentType
-from django.contrib.contenttypes import generic
+from django.contrib.contenttypes import fields
 from django.contrib.auth.models import User
 from django.db import models
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from django.utils.html import escape
 from django.utils import timezone
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 
 from askbot import const
 from askbot.models.fields import LanguageCodeField
@@ -40,11 +40,11 @@ class Vote(models.Model):
     VOTE_UP = +1
     VOTE_DOWN = -1
     VOTE_CHOICES = (
-        (VOTE_UP,   u'Up'),
-        (VOTE_DOWN, u'Down'),
+        (VOTE_UP,   'Up'),
+        (VOTE_DOWN, 'Down'),
     )
-    user = models.ForeignKey('auth.User', related_name='askbot_votes')
-    voted_post = models.ForeignKey('Post', related_name='votes')
+    user = models.ForeignKey('auth.User', related_name='askbot_votes', on_delete=models.CASCADE)
+    voted_post = models.ForeignKey('Post', related_name='votes', on_delete=models.CASCADE)
 
     vote = models.SmallIntegerField(choices=VOTE_CHOICES)
     voted_at = models.DateTimeField(default=timezone.now)
@@ -54,12 +54,12 @@ class Vote(models.Model):
     class Meta:
         unique_together = ('user', 'voted_post')
         app_label = 'askbot'
-        db_table = u'vote'
+        db_table = 'vote'
         verbose_name = _("vote")
         verbose_name_plural = _("votes")
 
-    def __unicode__(self):
-        return u'[%s] voted at %s: %s' % (self.user, self.voted_at, self.vote)
+    def __str__(self):
+        return '[%s] voted at %s: %s' % (self.user, self.voted_at, self.vote)
 
     def __int__(self):
         """1 if upvote -1 if downvote"""
@@ -141,8 +141,8 @@ class BadgeData(models.Model):
         verbose_name = _("badge data")
         verbose_name_plural = _("badge data")
 
-    def __unicode__(self):
-        return u'%s: %s' % (self.get_type_display(), self.slug)
+    def __str__(self):
+        return '%s: %s' % (self.get_type_display(), self.slug)
 
     def get_absolute_url(self):
         return '%s%s/' % (reverse('badge', args=[self.id]), self.slug)
@@ -150,22 +150,24 @@ class BadgeData(models.Model):
 
 class Award(models.Model):
     """The awarding of a Badge to a User."""
-    user = models.ForeignKey(User, related_name='award_user')
-    badge = models.ForeignKey(BadgeData, related_name='award_badge')
-    content_type = models.ForeignKey(ContentType)
+    user = models.ForeignKey(User, related_name='award_user', on_delete=models.CASCADE)
+    badge = models.ForeignKey(BadgeData, related_name='award_badge', on_delete=models.CASCADE)
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
     object_id = models.PositiveIntegerField()
-    content_object = generic.GenericForeignKey('content_type', 'object_id')
+    content_object = fields.GenericForeignKey('content_type', 'object_id')
     awarded_at = models.DateTimeField(default=timezone.now)
     notified = models.BooleanField(default=False)
 
-    def __unicode__(self):
-        return u'[%s] is awarded a badge [%s] at %s' % (self.user.username,
+    def __str__(self):
+        return '[%s] is awarded a badge [%s] at %s' % (self.user.username,
                                                         self.badge.get_name(),
                                                         self.awarded_at)
+    def __lt__(self, other):
+        return self.id < other.id
 
     class Meta:
         app_label = 'askbot'
-        db_table = u'award'
+        db_table = 'award'
         verbose_name = _("award")
         verbose_name_plural = _("awards")
 
@@ -202,11 +204,11 @@ class ReputeManager(models.Manager):
 
 class Repute(models.Model):
     """The reputation histories for user"""
-    user = models.ForeignKey(User)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
     # TODO: combine positive and negative to one value
     positive = models.SmallIntegerField(default=0)
     negative = models.SmallIntegerField(default=0)
-    question = models.ForeignKey('Post', null=True, blank=True)
+    question = models.ForeignKey('Post', null=True, blank=True, on_delete=models.CASCADE)
     language_code = LanguageCodeField()
     reputed_at = models.DateTimeField(default=timezone.now)
     reputation_type = models.SmallIntegerField(choices=const.TYPE_REPUTATION)
@@ -219,13 +221,13 @@ class Repute(models.Model):
 
     objects = ReputeManager()
 
-    def __unicode__(self):
-        return u'[%s]\' reputation changed at %s' % (self.user.username,
+    def __str__(self):
+        return '[%s]\' reputation changed at %s' % (self.user.username,
                                                      self.reputed_at)
 
     class Meta:
         app_label = 'askbot'
-        db_table = u'repute'
+        db_table = 'repute'
         verbose_name = _("repute")
         verbose_name_plural = _("repute")
 

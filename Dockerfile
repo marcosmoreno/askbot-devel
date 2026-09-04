@@ -1,26 +1,70 @@
-FROM python:2
+# Askbot Dockerfile — hobby / localhost deployment
+# Build:  docker compose build
+# Run:    docker compose up
+FROM python:3.12-slim-bookworm AS build
 
-ENV PYTHONUNBUFFERED 1
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
 
-ADD . /src/
-WORKDIR /src/
-RUN pip install -r askbot_requirements.txt
-RUN python setup.py install
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc \
+        libpq-dev \
+        libjpeg-dev \
+        zlib1g-dev \
+        libxml2-dev \
+        libxslt1-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-RUN mkdir /site/
-WORKDIR /site/
-RUN askbot-setup --dir-name=. --db-engine=${ASKBOT_DATABASE_ENGINE:-2} \
-    --db-name=${ASKBOT_DATABASE_NAME:-db.sqlite} \
-    --db-user="${ASKBOT_DATABASE_USER}" \
-    --db-password="${ASKBOT_DATABASE_PASSWORD}" \
-    --domain="${ASKBOT_DOMAIN:-example.com}"
+WORKDIR /src
+COPY . .
 
-RUN sed "s/ROOT_URLCONF.*/ROOT_URLCONF = 'urls'/"  settings.py -i
+RUN pip install --no-cache-dir setuptools . gunicorn whitenoise redis
 
-RUN python manage.py migrate --noinput
-RUN python manage.py collectstatic --noinput
+# Generate the askbot project with --noinput.
+# Caching and extra settings are read from snippet files in docker/.
+RUN askbot-setup --noinput \
+        --root-directory /app \
+        --proj-name askbot_site \
+        --db-settings "$(cat /src/docker/db_settings.py)" \
+        --admin-name "Admin" \
+        --admin-email "admin@example.com" \
+        --caching-settings "$(cat /src/docker/caching_settings.py)" \
+        --append-settings "$(cat /src/docker/extra_settings.py)" \
+    && printf '%s\n' \
+        'import os' \
+        'from django.core.wsgi import get_wsgi_application' \
+        "os.environ.setdefault(\"DJANGO_SETTINGS_MODULE\", \"askbot_site.settings\")" \
+        'application = get_wsgi_application()' \
+        > /app/askbot_site/wsgi.py
 
+# Collect static files during build (whitenoise will compress & cache-bust).
+WORKDIR /app
+RUN SECRET_KEY=build-placeholder python manage.py collectstatic --noinput
 
-CMD ["python", "manage.py", "runserver", "0.0.0.0:8080"]
+# --- Runtime stage ---
+FROM python:3.12-slim-bookworm
 
-EXPOSE 8080
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONPATH=/app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpq5 \
+        libjpeg62-turbo \
+        zlib1g \
+        libxml2 \
+        libxslt1.1 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy installed Python packages and the generated project
+COPY --from=build /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=build /usr/local/bin /usr/local/bin
+COPY --from=build /app /app
+
+COPY ./docker/docker-entrypoint.sh /docker-entrypoint.sh
+RUN chmod +x /docker-entrypoint.sh
+
+WORKDIR /app
+EXPOSE 8000
+
+ENTRYPOINT ["/docker-entrypoint.sh"]

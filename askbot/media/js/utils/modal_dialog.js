@@ -8,6 +8,7 @@ var ModalDialog = function () {
     this._acceptBtnEnabled = true;
     this._reject_button_text = gettext('Cancel');
     this._heading_text = 'Add heading by setHeadingText()';
+    this._title = undefined;
     this._initial_content = undefined;
     this._accept_handler = function () {};
     var me = this;
@@ -17,15 +18,46 @@ var ModalDialog = function () {
     this._content_element = undefined;
     this._headerEnabled = true;
     this._className = undefined;
+    this._escHandler = null;
+    this._dismissOnOutsideClick = true;
 };
 inherits(ModalDialog, WrappedElement);
 
 ModalDialog.prototype.show = function () {
+    var me = this;
+    this._escHandler = function(evt) {
+        if (evt.keyCode === 27) { // ESC
+            me.hide();
+        }
+    };
+    $(document).on('keydown.modalDialog', this._escHandler);
     this._element.modal('show');
+
+    var blocker = this._element.closest('.jquery-modal');
+    if (blocker.length) {
+        blocker.off('click');
+        blocker.on('click.modalDialog', function (e) {
+            if (me._dismissOnOutsideClick && e.target === blocker[0]) {
+                me.hide();
+            }
+        });
+    }
 };
 
 ModalDialog.prototype.hide = function () {
-    this._element.modal('hide');
+    if (this._escHandler) {
+        $(document).off('keydown.modalDialog', this._escHandler);
+        this._escHandler = null;
+    }
+    var blocker = this._element.closest('.jquery-modal');
+    if (blocker.length) {
+        blocker.off('click.modalDialog');
+    }
+    $.modal.close();
+};
+
+ModalDialog.prototype.setDismissOnOutsideClick = function (value) {
+    this._dismissOnOutsideClick = value;
 };
 
 ModalDialog.prototype.setClass = function (cls) {
@@ -46,8 +78,13 @@ ModalDialog.prototype.prependContent = function (content) {
     this._content_element.prepend(content);
 };
 
+ModalDialog.prototype.appendContent = function (content) {
+  this._content_element.append(content);
+};
+
 ModalDialog.prototype.setHeadingText = function (text) {
     this._heading_text = text;
+    if (this._title) this._title.text(text);
 };
 
 ModalDialog.prototype.setAcceptButtonText = function (text) {
@@ -62,10 +99,12 @@ ModalDialog.prototype.setRejectButtonText = function (text) {
 };
 
 ModalDialog.prototype.hideRejectButton = function () {
+    if (!this._rejectButton) return; 
     this._rejectBtn.hide();
 };
 
 ModalDialog.prototype.hideAcceptButton = function () {
+    if (!this._acceptButton) return; 
     this._acceptButton.hide();
 };
 
@@ -112,7 +151,7 @@ ModalDialog.prototype.createDom = function () {
         element.addClass(this._cssClass);
     }
 
-    element.addClass('modal');
+    element.addClass('js-modal');
     if (this._className) {
         element.addClass(this._className);
     }
@@ -121,20 +160,23 @@ ModalDialog.prototype.createDom = function () {
     var close_link = this.makeElement('div');
     if (this._headerEnabled) {
         var header = this.makeElement('div');
-        header.addClass('modal-header');
+        header.addClass('js-modal-header');
         element.append(header);
-        close_link.addClass('close');
+        /*
+        close_link.addClass('js-close');
         close_link.attr('data-dismiss', 'modal');
         close_link.html('x');
         header.append(close_link);
+        */
         var title = this.makeElement('h3');
-        title.html(this._heading_text);
+        title.text(this._heading_text);
         header.append(title);
+        this._title = title;
     }
 
     //2) create content
     var body = this.makeElement('div');
-    body.addClass('modal-body');
+    body.addClass('js-modal-body');
     element.append(body);
     this._content_element = body;
     if (this._initial_content) {
@@ -143,21 +185,21 @@ ModalDialog.prototype.createDom = function () {
 
     //3) create footer with accept and reject buttons (ok/cancel).
     var footer = this.makeElement('div');
-    footer.addClass('modal-footer');
+    footer.addClass('js-modal-footer');
     element.append(footer);
 
     var accept_btn = this.makeElement('button');
     if (this._acceptBtnEnabled === false) {
         accept_btn.prop('disabled', true);
     }
-    accept_btn.addClass('submit');
+    accept_btn.addClass('btn');
     accept_btn.html(this._accept_button_text);
     footer.append(accept_btn);
     this._acceptBtn = accept_btn;
 
     var reject_btn = this.makeElement('button');
     if (this._reject_button_text) {
-        reject_btn.addClass('submit cancel');
+        reject_btn.addClass('btn');
         reject_btn.html(this._reject_button_text);
         footer.append(reject_btn);
         this._rejectBtn = reject_btn;

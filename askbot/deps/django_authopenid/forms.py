@@ -29,12 +29,13 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 # THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import logging
+import base64
 import cgi
+import logging
 from django import forms
 from django.contrib.auth.models import User
-from django.utils.translation import ugettext as _
-from django.utils.translation import ugettext_lazy
+from django.utils.translation import gettext as _
+from django.utils.translation import gettext_lazy
 from django.conf import settings as django_settings
 from askbot.conf import settings as askbot_settings
 from askbot import const as askbot_const
@@ -49,12 +50,6 @@ except ImportError:
     from yadis import xri
 
 from askbot.deps.django_authopenid import util
-
-__all__ = [
-    'OpenidSigninForm','OpenidRegisterForm',
-    'ClassicRegisterForm', 'ChangePasswordForm',
-    'ChangeEmailForm', 'EmailPasswordForm', 'DeleteForm',
-]
 
 class ConsentField(forms.BooleanField):
     def __init__(self, *args, **kwargs):
@@ -83,7 +78,7 @@ class LoginProviderField(forms.CharField):
         if value in providers:
             return value
         else:
-            error_message = u'unknown provider name %s' % value
+            error_message = 'unknown provider name %s' % value
             logging.critical(error_message)
             raise forms.ValidationError(error_message)
 
@@ -267,7 +262,7 @@ class LoginForm(forms.Form):
                 _('Please, enter your new password')
             )
             field_set = set(('new_password', 'new_password_retyped'))
-            if field_set.issubset(self.cleaned_data.keys()):
+            if field_set.issubset(list(self.cleaned_data.keys())):
                 new_password = self.cleaned_data[
                                                 'new_password'
                                             ].strip()
@@ -299,56 +294,53 @@ class LoginForm(forms.Form):
             raise forms.ValidationError(error_message)
 
 
-class OpenidRegisterForm(forms.Form):
+class RegistrationForm(forms.Form):
     """ openid signin form """
     next = NextUrlField()
     username = UserNameField(widget_attrs={'tabindex': 0})
 
     def __init__(self, *args, **kwargs):
-        super(OpenidRegisterForm, self).__init__(*args, **kwargs)
+        self.request = kwargs.pop('request', None)
+        super(RegistrationForm, self).__init__(*args, **kwargs)
         email_required = not askbot_settings.BLANK_EMAIL_ALLOWED
         self.fields['email'] = UserEmailField(required=email_required)
         if askbot_settings.TERMS_CONSENT_REQUIRED:
             self.fields['terms_accepted'] = ConsentField()
+        if askbot_settings.USE_RECAPTCHA:
+            self.fields['recaptcha'] = AskbotReCaptchaField()
 
 
-class SafeOpenidRegisterForm(OpenidRegisterForm):
-    """this form uses recaptcha in addition
-    to the base register form
-    """
-    def __init__(self, *args, **kwargs):
-        super(SafeOpenidRegisterForm, self).__init__(*args, **kwargs)
-        self.fields['recaptcha'] = AskbotReCaptchaField()
+    def clean_email(self):
+        email_from_form = self.fields['email'].clean(self.cleaned_data['email'].strip())
 
+        if django_settings.ASKBOT_FEDERATED_LOGIN_EMAIL_EDITABLE:
+            return email_from_form
 
-class ClassicRegisterForm(SetPasswordForm):
-    """ legacy registration form """
+        email_from_session = self.request.session.get('email', None)
+        if email_from_session is None:
+            logging.critical('federated login email not found in the session')
+            raise forms.ValidationError(_('The email cannot be changed'))
 
-    next = NextUrlField()
-    username = UserNameField(widget_attrs={'tabindex': 0})
-    #fields password1 and password2 are inherited
+        email_from_session = email_from_session.strip()
+        if email_from_form.lower() != email_from_session.lower():
+            raise forms.ValidationError(_('The email cannot be changed'))
 
-    def __init__(self, *args, **kwargs):
-        super(ClassicRegisterForm, self).__init__(*args, **kwargs)
-        email_required = not askbot_settings.BLANK_EMAIL_ALLOWED
-        self.fields['email'] = UserEmailField(required=email_required)
-        if askbot_settings.TERMS_CONSENT_REQUIRED:
-            self.fields['terms_accepted'] = ConsentField()
+        return email_from_form
+
 
     def clean(self):
         if askbot_settings.NEW_REGISTRATIONS_DISABLED:
             raise forms.ValidationError(askbot_settings.NEW_REGISTRATIONS_DISABLED_MESSAGE)
-        data = super(ClassicRegisterForm, self).clean()
-        return data
+        return super(RegistrationForm, self).clean()
 
 
-class SafeClassicRegisterForm(ClassicRegisterForm):
-    """this form uses recaptcha in addition
-    to the base register form
-    """
-    def __init__(self, *args, **kwargs):
-        super(SafeClassicRegisterForm, self).__init__(*args, **kwargs)
-        self.fields['recaptcha'] = AskbotReCaptchaField()
+class PasswordRegistrationForm(RegistrationForm, SetPasswordForm):
+    """Password registration form.
+    Fields are inherited from the parent classes"""
+
+    def clean_email(self):
+        """Only clean the email field, as defined in the UserEmailField class"""
+        return self.fields['email'].clean(self.cleaned_data['email'])
 
 
 class ChangePasswordForm(forms.Form):
@@ -356,13 +348,13 @@ class ChangePasswordForm(forms.Form):
     new_password = forms.CharField(
                         widget=forms.PasswordInput(),
                         error_messages = {
-                            'required': ugettext_lazy('password is required'),
+                            'required': gettext_lazy('password is required'),
                         }
                     )
     new_password_retyped = forms.CharField(
                         widget=forms.PasswordInput(),
                         error_messages = {
-                            'required': ugettext_lazy('retype your password'),
+                            'required': gettext_lazy('retype your password'),
                         }
                     )
 
@@ -407,10 +399,10 @@ class ChangeEmailForm(forms.Form):
             except User.DoesNotExist:
                 return self.cleaned_data['email']
             except User.MultipleObjectsReturned:
-                raise forms.ValidationError(u'There is already more than one \
+                raise forms.ValidationError('There is already more than one \
                     account registered with that e-mail address. Please try \
                     another.')
-            raise forms.ValidationError(u'This email is already registered \
+            raise forms.ValidationError('This email is already registered \
                 in our database. Please choose another.')
 
 
@@ -434,7 +426,7 @@ class AccountRecoveryForm(forms.Form):
                 self.cleaned_data['user'] = user
             except IndexError:
                 del self.cleaned_data['email']
-                message = _('Sorry, we don\'t have this email address in the database')
+                message = _("Sorry, we don't have a user with this email.")
                 raise forms.ValidationError(message)
 
 
@@ -474,7 +466,7 @@ class EmailPasswordForm(forms.Form):
     """ send new password form """
     username = UserNameField(
                     skip_clean=True,
-                    label=ugettext_lazy('Your user name')
+                    label=gettext_lazy('Your user name')
                 )
 
     def __init__(self, data=None, files=None, auto_id='id_%s', prefix=None,
@@ -493,14 +485,20 @@ class EmailPasswordForm(forms.Form):
                 raise forms.ValidationError(_("sorry, there is no such user name"))
         return self.cleaned_data['username']
 
-def get_registration_form_class():
+def get_federated_registration_form_class():
     """returns class for the user registration form
-    user has a chance to specify the form via setting `REGISTRATION_FORM`
+    user has a chance to specify the form via setting `FEDERATED_REGISTRATION_FORM`
     """
-    custom_class = getattr(django_settings, 'REGISTRATION_FORM', None)
+    custom_class = getattr(django_settings, 'FEDERATED_REGISTRATION_FORM', None)
     if custom_class:
         return load_module(custom_class)
-    elif askbot_settings.USE_RECAPTCHA:
-        return SafeOpenidRegisterForm
-    else:
-        return OpenidRegisterForm
+    return RegistrationForm
+
+def get_password_registration_form_class():
+    """returns class for the user registration form
+    user has a chance to specify the form via setting `PASSWORD_REGISTRATION_FORM`
+    """
+    custom_class = getattr(django_settings, 'PASSWORD_REGISTRATION_FORM', None)
+    if custom_class:
+        return load_module(custom_class)
+    return PasswordRegistrationForm

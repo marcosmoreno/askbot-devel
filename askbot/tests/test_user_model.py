@@ -1,21 +1,67 @@
-from askbot.tests.utils import AskbotTestCase
+from askbot.tests.utils import AskbotTestCase, with_settings
 from django.contrib.auth.models import User
 from askbot import models
 from askbot.conf import settings
+from askbot import signals
 from askbot.models.tag import format_personal_group_name
+from askbot.models.user import get_invited_moderators
+from askbot.models.role import ADMIN_ROLES
+
+INVITED_MODS = """one@example.com One User
+broken user without email
+two@example.com Two User"""
 
 class UserModelTests(AskbotTestCase):
     """test user model"""
 
+    def test_get_invited_moderators0(self):
+        mods = get_invited_moderators()
+        self.assertEqual(len(mods), 0)
+
+    @with_settings(INVITED_MODERATORS=INVITED_MODS)
+    def test_get_invited_moderators1(self):
+        mods = get_invited_moderators()
+        self.assertEqual(len(mods), 2)
+
+        emails = set([m.email for m in mods])
+        self.assertEqual(emails, set(['one@example.com', 'two@example.com']))
+
+        names = set([m.username for m in mods])
+        self.assertEqual(names, set(['One User', 'Two User']))
+
+
+    @with_settings(INVITED_MODERATORS=INVITED_MODS)
+    def test_get_invited_moderators2(self):
+        u = self.create_user('One User', 'one@example.com')
+        mods = get_invited_moderators()
+        self.assertEqual(len(mods), 1)
+
+        emails = set([m.email for m in mods])
+        self.assertEqual(emails, set(['two@example.com',]))
+
+        names = set([m.username for m in mods])
+        self.assertEqual(names, set(['Two User',]))
+
+
+    @with_settings(INVITED_MODERATORS=INVITED_MODS)
+    def test_invited_mod_removed_from_setting_upon_joining(self):
+        # we need one more user so that it's made admin
+        # and that the next user is not automatically made an admin
+        admin = self.create_user('Admin', 'admin@example.com')
+        self.assertEqual(len(settings.INVITED_MODERATORS.split('\n')), 3)
+        u = self.create_user('One User', 'one@example.com')
+        self.assertEqual(len(settings.INVITED_MODERATORS.split('\n')), 2)
+        u = self.reload_object(u)
+        self.assertEqual(u.status, 'm')
+
+
     def test_new_user_has_personal_group(self):
         user = User.objects.create_user('somebody', 'somebody@example.com')
         group_name = format_personal_group_name(user)
-        group = models.Group.objects.filter(name=group_name)
-        self.assertEqual(group.count(), 1)
-        memberships = models.GroupMembership.objects.filter(
+        group = models.Group.objects.get(name=group_name)
+        memberships = models.GroupMembership.objects.get(
                                                 group=group, user=user
                                             )
-        self.assertEqual(memberships.count(), 1)
 
     def test_new_user_has_subscriptions(self):
         old_value = settings.SUBSCRIBED_TAG_SELECTOR_ENABLED
@@ -51,3 +97,29 @@ class UserModelTests(AskbotTestCase):
         user = self.create_user('user')
         user.username = 'user2'
         user.save()
+
+    def test_superuser_is_admin(self):
+        user = self.create_user('user')
+        user.is_superuser = True
+        user.save()
+        self.assertEqual(user.status, 'd')
+        roles = set(user.askbot_roles.all().values_list('role', flat=True))
+        self.assertEqual(roles, ADMIN_ROLES)
+
+    def test_dismissed_superuser_is_approved_user(self):
+        user = self.create_user('user')
+        user.is_superuser = True
+        user.save()
+        user.is_superuser = False
+        user.save()
+        self.assertEqual(user.status, 'a')
+        roles = set(user.askbot_roles.all().values_list('role', flat=True))
+        self.assertEqual(roles, set())
+
+    def test_first_user_is_admin(self):
+        self.assertEqual(User.objects.count(), 0)
+        user = self.create_user('user')
+        self.assertEqual(user.status, 'd')
+        roles = set(user.askbot_roles.all().values_list('role', flat=True))
+        self.assertEqual(roles, ADMIN_ROLES)
+        self.assertEqual(user.is_superuser, True)

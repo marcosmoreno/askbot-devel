@@ -3,14 +3,14 @@ Settings for reputation changes that apply to
 user in response to various actions by the same
 users or others
 """
-from django.utils.translation import ugettext_lazy as _
-from django.utils.translation import string_concat
+from django.utils.translation import gettext_lazy as _
+from django.utils.text import format_lazy
 
 from askbot.conf.settings_wrapper import settings
 from askbot.conf.super_groups import REP_AND_BADGES
-from askbot.deps.livesettings import ConfigurationGroup
-from askbot.deps.livesettings import IntegerValue
-from askbot.deps.livesettings import BooleanValue
+from livesettings.values import ConfigurationGroup
+from livesettings.values import IntegerValue
+from livesettings.values import BooleanValue
 
 BADGES = ConfigurationGroup(
     'BADGES', _('Badge settings'), ordering=2, super_group=REP_AND_BADGES)
@@ -28,14 +28,14 @@ def register_badge_settings(badge_slug=None, badge_name=None, params=None):
     if params is None:
         return
 
-    for param_slug, param_data in params.items():
+    for param_slug, param_data in list(params.items()):
         param_description = param_data[0]
         param_default = param_data[1]
         settings.register(
             IntegerValue(
                 BADGES,
                 badge_slug + '_BADGE_' + param_slug,
-                description=string_concat(badge_name, ': ', param_description),
+                description=format_lazy('{}: {}', badge_name, param_description),
                 default=param_default)
         )
 
@@ -245,3 +245,13 @@ register_badge_settings(
         'MIN_UPVOTES': (_('minimum upvotes for the answer'), 1)
     }
 )
+
+register_badge_settings(
+    'RAPID_RESPONDER',
+    _('Rapid Responder'),
+    params={
+        'MAX_DELAY': (_('maximum delay in hours'), 48),
+        'EXPIRES': (_('badge expiration in days'), 48),
+    }
+)
+

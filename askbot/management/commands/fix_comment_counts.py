@@ -5,12 +5,12 @@ question or answer, and in some cases that makes it imposible for users to view
 all the comments.
 """
 
-from django.core.management.base import NoArgsCommand
+from django.core.management import BaseCommand
 from django.db.models import signals, Count, F
 from askbot.models import Post
 from askbot.utils.console import ProgressBar
 
-class Command(NoArgsCommand):
+class Command(BaseCommand):
 
     help = "Fixes the wrong comment counts on questions and answers, "\
            "where answers have been converted to comments.\n"
@@ -30,5 +30,5 @@ class Command(NoArgsCommand):
         count = posts.count()
         message = 'Fixing comment counts'
         for post in ProgressBar(posts.iterator(), count, message):
-            new_count = post.comments.count();
-            Post.objects.filter(id=post.id).update(comment_count=new_count)
+            post.recount_comments()
+            Post.objects.filter(id=post.id).update(comment_count=post.comment_count)

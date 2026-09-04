@@ -1,15 +1,15 @@
 """
 General skin settings
 """
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from django.conf import settings as django_settings
 from django.core.validators import URLValidator
 from django.core.exceptions import ValidationError
 
 import askbot
 from askbot.conf.settings_wrapper import settings
-from askbot.deps.livesettings import ConfigurationGroup
-from askbot.deps.livesettings import values
+from livesettings.values import ConfigurationGroup
+from livesettings import values
 from askbot.skins import utils as skin_utils
 from askbot import const
 from askbot.conf.super_groups import CONTENT_AND_UI
@@ -52,7 +52,7 @@ settings.register(
         help_text=_(
             'To change the logo, select new file, then submit '
             'this whole form.'),
-        default='/images/logo.gif',
+        default='/images/askbot-logo.svg',
         url_resolver=skin_utils.get_media_url
     )
 )
@@ -61,7 +61,7 @@ settings.register(
 LANG_MODE = getattr(django_settings, 'ASKBOT_LANGUAGE_MODE', 'single-lang')
 HAS_ASKBOT_LOCALE_MIDDLEWARE = (
     'askbot.middleware.locale.LocaleMiddleware' in
-    django_settings.MIDDLEWARE_CLASSES
+    django_settings.MIDDLEWARE
 )
 if LANG_MODE == 'single-lang' and HAS_ASKBOT_LOCALE_MIDDLEWARE:
     settings.register(
@@ -83,7 +83,7 @@ settings.register(
             'Check if you want to show logo in the forum header '
             'or uncheck in the case you do not want the logo to '
             'appear in the default location'),
-        default=False
+        default=True
     )
 )
 
@@ -174,6 +174,7 @@ settings.register(
         GENERAL_SKIN_SETTINGS,
         'CUSTOM_HEADER',
         default='',
+        localized=True,
         description=_('Custom header additions'),
         help_text=_(
             'Header is the bar at the top of the content that contains user '
@@ -207,6 +208,8 @@ settings.register(
     values.LongStringValue(
         GENERAL_SKIN_SETTINGS,
         'CUSTOM_FOOTER',
+        default='',
+        localized=True,
         description=_('Custom footer (HTML format)'),
         help_text=_(
             '<strong>To enable this function</strong>, please select option '
@@ -235,6 +238,7 @@ settings.register(
         GENERAL_SKIN_SETTINGS,
         'CUSTOM_CSS',
         description=_('Custom style sheet (CSS)'),
+        default='',
         help_text=_(
             '<strong>To use this function</strong>, check "Apply custom '
             'style sheet" option above. The CSS rules added in this window '
@@ -262,6 +266,7 @@ settings.register(
         GENERAL_SKIN_SETTINGS,
         'CUSTOM_JS',
         description=_('Custom javascript'),
+        default='',
         help_text=_(
             'Type or paste plain javascript that you would like '
             'to run on your site. Link to the script will be inserted '

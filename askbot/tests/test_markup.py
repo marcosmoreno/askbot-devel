@@ -19,12 +19,12 @@ class MarkupTest(AskbotTestCase):
         anticipated_authors = [self.u1,]
         mentioned_authors, output = markup.mentionize_text(text, anticipated_authors)
         self.assertTrue(self.u1 in mentioned_authors)
-        self.assertEquals(output, expected_output % {'user_url': self.u1.get_profile_url()})
+        self.assertEqual(output, expected_output % {'user_url': self.u1.get_profile_url()})
 
     def test_extract_mentioned_name_seeds(self):
         text = "oh hai @user1 how are you?"
         output = markup.extract_mentioned_name_seeds(text)
-        self.assertEquals(output, set(['user1']))
+        self.assertEqual(output, set(['user1']))
 
 """
 More test cases for the future, taken from
@@ -73,11 +73,6 @@ Should fail against:
     filename.txt
 
 
-Known to fail against:
-    http://example.com/quotes-are-“part”
-    ✪df.ws/1234
-    example.com
-    example.com/
 """
 
 class MarkdownTestCase(TestCase):
@@ -89,42 +84,73 @@ class MarkdownTestCase(TestCase):
         text = """text <a href="http://example.com/">link</a> text"""
         self.assertHTMLEqual(self.conv(text), '<p>' + text + '</p>\n')
 
-    def test_full_link_converts_to_anchor(self):
-        text = """text http://example.com/ text"""
-        expected ="""<p>text <a href="http://example.com/">http://example.com/</a> text</p>\n"""
-        #todo: note there is a weird artefact produced by markdown2 inself
-        #trailing slash after the closing </a> tag
-        #the artifact is produced by _do_auto_links() function
-        self.assertHTMLEqual(self.conv(text), expected)
+    def test_javascript_url_not_linked(self):
+        """javascript: URLs should NOT be auto-linked (XSS prevention)"""
+        text = "Click javascript:alert('xss') here"
+        html = self.conv(text)
+        # Should NOT create a link with javascript: href
+        self.assertNotIn('href="javascript:', html)
 
-    def test_protocol_less_link_converts_to_anchor(self):
-        text = """text www.example.com text"""
-        expected ="""<p>text <a href="http://www.example.com">www.example.com</a> text</p>\n"""
-        self.assertHTMLEqual(self.conv(text), expected)
+    def test_javascript_url_variations(self):
+        """Various javascript: URL forms should all be rejected"""
+        variants = [
+            "javascript:alert(1)",
+            "JAVASCRIPT:alert(1)",
+            "JavaScript:void(0)",
+        ]
+        for variant in variants:
+            text = f"Test {variant} here"
+            html = self.conv(text)
+            self.assertNotIn('href="javascript:', html.lower(),
+                f"javascript: URL should not be linked: {variant}")
 
-    def test_convert_mixed_text(self):
-        text = """<p>
-some text
-<a href="http://example.com">example</a>
-replace this http://example.com
-replace that example.com
-<code>http://example.com</code>
-</p>
-<pre>http://example.com</pre>
-"""
-        """
-        this is messed up by markdown2
-        <a href="http://example.com"><div>http://example.com</div></a>
-        """
-        expected = """<p>
-some text
-<a href="http://example.com">example</a>
-replace this <a href="http://example.com">http://example.com</a>
-replace that <a href="http://example.com">example.com</a>
-<code>http://example.com</code>
-</p>
-<pre>http://example.com</pre>
-"""
-        """<a href="http://example.com"><div>http://example.com</div></a>
-        """
-        self.assertHTMLEqual(self.conv(text), expected)
+    def test_data_url_not_linked(self):
+        """data: URLs should NOT be auto-linked (XSS prevention)"""
+        text = "See data:text/html,<script>alert(1)</script> here"
+        html = self.conv(text)
+        self.assertNotIn('href="data:', html)
+
+    def test_data_url_variations(self):
+        """Various data: URL case forms should all be rejected"""
+        variants = [
+            "data:text/html,<script>alert(1)</script>",
+            "DATA:text/html,<script>alert(1)</script>",
+            "Data:text/html,<b>test</b>",
+        ]
+        for variant in variants:
+            text = f"Test {variant} here"
+            html = self.conv(text)
+            self.assertNotIn('href="data:', html.lower(),
+                f"data: URL should not be linked: {variant}")
+
+    def test_data_url_base64_not_linked(self):
+        """Base64-encoded data: URLs should NOT be auto-linked"""
+        # PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg== decodes to <script>alert(1)</script>
+        text = "See data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg== here"
+        html = self.conv(text)
+        self.assertNotIn('href="data:', html)
+
+    def test_data_url_in_markdown_link_sanitized(self):
+        """Markdown links with data: URLs should be sanitized"""
+        text = "[click me](data:text/html,<script>alert(1)</script>)"
+        html = self.conv(text)
+        # Link should either be removed or href sanitized
+        self.assertNotIn('href="data:', html)
+
+    def test_data_url_in_html_anchor_sanitized(self):
+        """Hand-coded HTML anchors with data: URLs should be sanitized"""
+        text = '<a href="data:text/html,<script>alert(1)</script>">click</a>'
+        html = self.conv(text)
+        self.assertNotIn('href="data:', html)
+
+    def test_javascript_url_in_html_anchor_sanitized(self):
+        """Hand-coded HTML anchors with javascript: URLs should be sanitized"""
+        text = '<a href="javascript:alert(1)">click</a>'
+        html = self.conv(text)
+        self.assertNotIn('href="javascript:', html.lower())
+
+    def test_vbscript_url_not_linked(self):
+        """vbscript: URLs should NOT be auto-linked (XSS prevention)"""
+        text = "Click vbscript:msgbox(1) here"
+        html = self.conv(text)
+        self.assertNotIn('href="vbscript:', html.lower())

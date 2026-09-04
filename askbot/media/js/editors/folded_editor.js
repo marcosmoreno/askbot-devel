@@ -23,7 +23,7 @@ FoldedEditor.prototype.onAfterOpenHandler = function () {
     if (editor) {
         editor.start();
         editor.focus(function(){
-            editor.putCursorAtEnd()
+            editor.putCursorAtStart();
             $(document).trigger('askbot.FoldedEditor.afterOpened', [this]);
         });
     }
@@ -40,7 +40,7 @@ FoldedEditor.prototype.getOpenHandler = function () {
             promptBox.hide();
             editorBox.show();
             var element = me.getElement();
-            element.addClass('unfolded');
+            element.addClass('js-active');
 
             /* make the editor one shot - once it unfolds it's
             * not accepting any events
@@ -59,15 +59,12 @@ FoldedEditor.prototype.getOpenHandler = function () {
 FoldedEditor.prototype.decorate = function (element) {
     this._element = element;
     this._prompt = element.find('.js-folded-editor-trigger');
-    this._editorBox = element.find('.editor-proper');
+    this._editorBox = element.find('.js-folded-editor-editor');
 
     var editorType = askbot.settings.editorType;
     var editor;
 
-    if (editorType === 'tinymce') {
-        editor = new TinyMCE();
-        editor.setId('editor');
-    } else if (editorType === 'markdown') {
+    if (editorType === 'markdown') {
         editor = new WMD({'minLines': 10});
         editor.setIdSeed('');
     } else {
@@ -76,7 +73,7 @@ FoldedEditor.prototype.decorate = function (element) {
     editor.setTextareaName('text');
     this._editor = editor;
 
-    var placeHolder = element.find('.editor-placeholder');
+    var placeHolder = element.find('.js-editor-placeholder');
     editor.setText(placeHolder.data('draftAnswer'));
     placeHolder.append(editor.getElement());
     //editor.start();

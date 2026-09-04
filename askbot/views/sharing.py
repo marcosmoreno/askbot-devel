@@ -2,10 +2,10 @@ from askbot import const
 from askbot.deps.django_authopenid.util import OAuthConnection
 from askbot.utils import decorators
 from django.contrib.auth.decorators import login_required
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.http import HttpResponseRedirect
 from django.views.decorators import csrf
-import simplejson
+import json
 
 @login_required
 def start_sharing_twitter(request):
@@ -28,7 +28,7 @@ def save_twitter_access_token(request):
                         oauth_verifier = request.GET['oauth_verifier']
                     )
     #save the access token
-    request.user.twitter_access_token = simplejson.dumps(oauth.access_token)
+    request.user.twitter_access_token = json.dumps(oauth.access_token)
     request.user.twitter_handle = oauth.get_username()
     if request.user.social_sharing_mode == const.SHARE_NOTHING:
         request.user.social_sharing_mode = const.SHARE_MY_POSTS

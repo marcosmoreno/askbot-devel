@@ -1,4 +1,4 @@
-import markdown2
+import os
 from django.conf import settings as django_settings
 from django.test import TestCase
 from askbot.tests.utils import with_settings
@@ -8,8 +8,49 @@ from askbot.utils.html import replace_links_with_text
 from askbot.utils.html import get_text_from_html
 from askbot.utils.html import sanitize_html
 from askbot.utils import html as html_utils
-from askbot.utils.markup import get_parser
+from askbot.utils.functions import list_directory_files, encode_jwt, decode_jwt
 from askbot.conf import settings as askbot_settings
+import askbot
+
+class FunctionTests(TestCase):
+    def test_list_directory_files(self):
+        root_dir = askbot.get_install_directory()
+        dir_path = os.path.join(root_dir, 'locale')
+        file_list = list_directory_files(dir_path)
+        file1 = os.path.join(root_dir, 'locale', 'en',
+                             'LC_MESSAGES', 'django.po')
+        file2 = os.path.join(root_dir, 'locale', 'en',
+                             'LC_MESSAGES', 'djangojs.po')
+        self.assertTrue(file1 in file_list)
+        self.assertTrue(file2 in file_list)
+
+    def test_encode_jwt_returns_string(self):
+        token = encode_jwt({'next_url': '/questions/'})
+        self.assertIsInstance(token, str)
+
+    def test_encode_decode_jwt_roundtrip(self):
+        data = {'next_url': '/questions/'}
+        token = encode_jwt(data)
+        result = decode_jwt(token)
+        self.assertEqual(result, data)
+
+    def test_encode_decode_jwt_with_multiple_keys(self):
+        data = {'next_url': '/users/', 'extra': 'data'}
+        token = encode_jwt(data)
+        result = decode_jwt(token)
+        self.assertEqual(result, data)
+
+    def test_decode_jwt_rejects_tampered_token(self):
+        token = encode_jwt({'next_url': '/questions/'})
+        # Tamper with the payload segment so the signature no longer matches.
+        # Mutating the last char of the signature is unreliable because
+        # base64url's trailing bits may be unused, leaving the decoded
+        # signature bytes unchanged.
+        header, payload, signature = token.split('.')
+        flipped = 'B' if payload[0] != 'B' else 'C'
+        tampered = '.'.join([header, flipped + payload[1:], signature])
+        with self.assertRaises(Exception):
+            decode_jwt(tampered)
 
 
 class UrlUtilsTests(TestCase):
@@ -51,10 +92,10 @@ class ReplaceLinksWithTextTests(TestCase):
         )
 
     def test_local_image_not_replaced(self):
-        text = u'<img src="/some-image.gif"/>'
+        text = '<img src="/some-image.gif"/>'
         self.assertEqual(
                 replace_links_with_text(text), 
-                u'<img src="/some-image.gif">'
+                '<img src="/some-image.gif">'
             )
 
     def test_local_url_with_hotlinked_image_replaced(self):
@@ -118,42 +159,17 @@ class HTMLUtilsTests(TestCase):
     def test_get_text_from_html(self):
         self.assertEqual(
             get_text_from_html('ataoesa uau <a>link</a>aueaotuosu ao <a href="http://cnn.com">CNN!</a>\nnaouaouuau<img> <img src="http://cnn.com/1.png"/> <img src="http://cnn.com/2.png" alt="sometext">'),
-            u'ataoesa uau linkaueaotuosu ao http://cnn.com (CNN!)\n\nnaouaouuau http://cnn.com/1.png http://cnn.com/2.png (sometext)'
+            'ataoesa uau linkaueaotuosu ao http://cnn.com (CNN!)\n\nnaouaouuau http://cnn.com/1.png http://cnn.com/2.png (sometext)'
         )
 
 
-class GetParserTest(TestCase):
-    def test_func(self):
-        parser = get_parser()
-        self.assertIsInstance(parser, markdown2.Markdown)
-
-    def test_markdown_class_addr(self):
-        parser = get_parser('askbot.tests.utils.Markdown')
-        self.assertIsInstance(parser, markdown2.Markdown)
-
-
 class SanitizeHtml(TestCase):
-    def test_sanitize_html(self):
+    def test_strip_forbidden_attributes(self):
         html = '<p id="foo" class="bar">TEXT</p>'
         new_html = sanitize_html(html)
-        self.assertNotIn('foo', new_html)
-        self.assertIn('bar', new_html)
+        self.assertEqual(new_html, '<p>TEXT</p>')
 
-    def test_sanitize_html_with_extra_elements(self):
-        setattr(django_settings, 'ASKBOT_ALLOWED_HTML_ELEMENTS',
-                html_utils.ALLOWED_HTML_ELEMENTS + ('ham',))
-        html = '<p id="foo" class="bar">TEXT</p><p><ham></ham></p>'
+    def test_strip_forbidden_tags(self):
+        html = '<button onClick="javascript:alert(\'foobar\')">click me</button>'
         new_html = sanitize_html(html)
-        self.assertIn('<ham>', new_html)
-        self.assertNotIn('foo', new_html)
-        self.assertIn('bar', new_html)
-        delattr(django_settings, 'ASKBOT_ALLOWED_HTML_ELEMENTS')
-
-    def test_sanitize_html_with_extra_attrs(self):
-        setattr(django_settings, 'ASKBOT_ALLOWED_HTML_ATTRIBUTES',
-                html_utils.ALLOWED_HTML_ATTRIBUTES + ('id',))
-        html = '<p id="foo" class="bar">TEXT</p>'
-        new_html = sanitize_html(html)
-        self.assertIn('id="foo"', new_html)
-        self.assertIn('class="bar"', new_html)
-        delattr(django_settings, 'ASKBOT_ALLOWED_HTML_ATTRIBUTES')
+        self.assertEqual(new_html, 'click me')

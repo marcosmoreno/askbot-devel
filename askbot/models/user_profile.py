@@ -1,14 +1,16 @@
-from askbot import const
-from askbot.models.fields import LanguageCodeField
 from django.conf import settings as django_settings
 from django.core.cache import cache
 from django.db.models.signals import post_save
 from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
-from jsonfield import JSONField
 from django_countries.fields import CountryField
+from jsonfield import JSONField
+from askbot import const
+from askbot.models.fields import LanguageCodeField
 
+# the mere fact that this method's use case is so specific,
+# that the parameter is called "user" ...
 def get_profile_cache_key(user):
     if user.pk:
         return 'askbot-profile-{}'.format(user.pk)
@@ -24,7 +26,7 @@ def get_localized_profile_cache_key(user, lang):
 
 def get_profile_from_db(user):
     if user.pk:
-        profile, junk = UserProfile.objects.get_or_create(auth_user_ptr=user)
+        profile, _ = UserProfile.objects.get_or_create(auth_user_ptr=user) # pylint: disable=no-member
         return profile
     raise ValueError('auth.models.User is not saved, cant make UserProfile')
 
@@ -50,7 +52,7 @@ def user_profile_property(field_name):
     def setter(user, value):
         profile = get_profile(user)
         setattr(profile, field_name, value)
-        UserProfile.objects.filter(pk=profile.pk).update(**{field_name: value})
+        UserProfile.objects.filter(pk=profile.pk).update(**{field_name: value}) # pylint: disable=no-member
         profile.update_cache()
 
     return property(getter, setter)
@@ -60,9 +62,7 @@ def add_profile_property(cls, name):
     prop = user_profile_property(name)
     cls.add_to_class(name, prop)
 
-
-def add_profile_properties(cls):
-    names = (
+USER_PROFILE_PROPERTIES = (
         'avatar_type',
         'avatar_urls',
         'bronze',
@@ -97,17 +97,21 @@ def add_profile_properties(cls):
         'twitter_handle',
         'website',
     )
-    for name in names:
+
+
+def add_profile_properties(cls):
+    for name in USER_PROFILE_PROPERTIES:
         add_profile_property(cls, name)
 
 
 class UserProfile(models.Model):
-    #text_search_vector           | tsvector                 | 
+    #text_search_vector           | tsvector                 |
     auth_user_ptr = models.OneToOneField(
                                 User,
                                 parent_link=True,
                                 related_name='askbot_profile',
-                                primary_key=True
+                                primary_key=True,
+                                on_delete=models.CASCADE
                             )
     avatar_urls = JSONField(default={})
     status = models.CharField(
@@ -119,6 +123,7 @@ class UserProfile(models.Model):
     is_fake = models.BooleanField(default=False)
     email_isvalid = models.BooleanField(default=False)
     email_key = models.CharField(max_length=32, null=True)
+    email_is_confidential = models.BooleanField(default=False)
     #hardcoded initial reputaion of 1, no setting for this one
     reputation = models.PositiveIntegerField(default=const.MIN_REPUTATION, db_index=True)
     gravatar = models.CharField(max_length=32)
@@ -136,7 +141,7 @@ class UserProfile(models.Model):
     last_seen = models.DateTimeField(default=timezone.now)
     #todo: maybe remove
     real_name = models.CharField(max_length=100, blank=True)
-    website = models.URLField(max_length=200, blank=True)
+    website = models.URLField(max_length=const.PROFILE_WEBSITE_URL_MAX_LENGTH, blank=True)
     #location field is actually city
     location = models.CharField(max_length=100, blank=True)
     country = CountryField(blank=True, null=True)
@@ -180,8 +185,44 @@ class UserProfile(models.Model):
     class Meta:
         app_label = 'askbot'
 
+    def __str__(self):
+        user = User.objects.get(pk=self.pk)
+        return f'{user.username}\'s ({user.email}) profile'
+
+    def anonymize(self):
+        """Deletes personal data"""
+        self.avatar_urls = dict()
+        self.status = 't'
+        self.email_isvalid = False
+        self.email_key = None
+        self.gravatar = ''
+        self.avatar_type = 'n'
+        self.real_name = ''
+        self.website = ''
+        #location field is actually city
+        self.location = ''
+        self.country = None
+        self.show_country = False
+        self.date_of_birth = None
+        #interesting tags and ignored tags are to store wildcard tag selections only
+        self.interesting_tags = ''
+        self.ignored_tags = ''
+        self.subscribed_tags = ''
+        self.email_signature = ''
+        self.show_marked_tags = False
+        self.new_response_count = 0
+        self.seen_response_count = 0
+        self.twitter_access_token = ''
+        self.twitter_handle = ''
+        self.social_sharing_mode = const.SHARE_NOTHING
+
     def get_cache_key(self):
-        return get_profile_cache_key(self.auth_user_ptr)
+        try:
+            # Django <=1.10
+            return get_profile_cache_key(self.auth_user_ptr)
+        except AttributeError:
+            # Django ==1.11
+            return get_profile_cache_key(self)
 
     def update_cache(self):
         key = self.get_cache_key()
@@ -193,7 +234,7 @@ class UserProfile(models.Model):
 
 
 class LocalizedUserProfile(models.Model):
-    auth_user = models.ForeignKey(User, related_name='localized_askbot_profiles')
+    auth_user = models.ForeignKey(User, related_name='localized_askbot_profiles', on_delete=models.CASCADE)
     about = models.TextField(blank=True)
     language_code = LanguageCodeField(db_index=True)
     reputation = models.PositiveIntegerField(default=0, db_index=True)
@@ -205,6 +246,12 @@ class LocalizedUserProfile(models.Model):
 
     class Meta:
         app_label = 'askbot'
+
+    def anonymize(self):
+        """Removes personal data"""
+        self.about = ''
+        self.reputation = 0
+        self.is_claimed = False
 
     def get_cache_key(self):
         return get_localized_profile_cache_key(self.auth_user, self.language_code)

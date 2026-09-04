@@ -11,7 +11,7 @@ To run these commands there is a general pattern::
     cd project_directory
     python manage.py some_command [possible arguments and parameters]
 
-I.e. the commands are generally run from the project directory (the same 
+I.e. the commands are generally run from the project directory (the same
 one that contains your settings.py file) and they may use additional parameters and options.
 
 Data and User administration commands
@@ -24,6 +24,9 @@ The bulk of the management commands fall into this group and will probably be th
 +======================================+=============================================================+
 | `add_admin <user_id>`                | Turn user into an administrator                             |
 |                                      | `<user_id>` is a numeric user id of the account             |
++--------------------------------------+-------------------------------------------------------------+
+| `askbot_export_user_data             | Exports user data in json format                            |
+| --user-id <id> --file <path>         |                                                             |
 +--------------------------------------+-------------------------------------------------------------+
 | `apply_hinted_tags                   | Apply tags to all questions in batch given the list of tags |
 | --tag-names <file>`                  | provided with a file. The file must contain tags -          |
@@ -48,6 +51,8 @@ The bulk of the management commands fall into this group and will probably be th
 | `askbot_clear_moderation_queue`      | Clear all items from the moderation queue                   |
 +--------------------------------------+-------------------------------------------------------------+
 | `askbot_award_badges`                | Awards badges to users (only some badges are supported)     |
++--------------------------------------+-------------------------------------------------------------+
+| `askbot_expire_badges`               | Expire badges (only some badges are supported)              |
 +--------------------------------------+-------------------------------------------------------------+
 | `askbot_recount_badges`              | Fixes badge award counts, use when disabling/enabling badges|
 +--------------------------------------+-------------------------------------------------------------+
@@ -112,7 +117,7 @@ These commands import or add data to the Askbot forum.
 |                                 | command on empty database. Also - before running, make sure |
 |                                 | that `askbot.importers.stackexchange` is in the list of     |
 |                                 | installed apps within your settings.py file (it might also  |
-|                                 | be necessary to run `syncdb` command to initiate the        |
+|                                 | be necessary to run `migrate` command to initiate the       |
 |                                 | SE importer tables).                                        |
 +---------------------------------+-------------------------------------------------------------+
 | `askbot_add_xml_content         | Add xml Askbot data dumped with the Django command          |
@@ -164,37 +169,40 @@ Any configurable options, related to these commands are accessible via "Email" s
 Data repair commands
 ====================
 
-Under certain circumstances (especially when using MySQL database with MyISAM 
-storage engine or when venturing to adapt the software to your needs) some 
-records in the database tables may become internally inconsistent. 
+Under certain circumstances (especially when using MySQL database with MyISAM
+storage engine or when venturing to adapt the software to your needs) some
+records in the database tables may become internally inconsistent.
 The commands from this section will help fix those issues.
 
 .. note::
 
- Data inconsistency in the Askbot project is considered as a critical error and as a matter of 
+ Data inconsistency in the Askbot project is considered as a critical error and as a matter of
  the project policy is addressed on the day of reporting. If you discover such issue - please
  report it at the forum or by email at `admin@askbot.org`
 
-+--------------------------------+-------------------------------------------------------------+
-| command                        | purpose                                                     |
-+================================+=============================================================+
-| `add_missing_subscriptions`    | adds default values of email subscription settings to users |
-|                                | that lack them                                              |
-+--------------------------------+-------------------------------------------------------------+
-| `fix_answer_counts`            | recalculates answer counts for all questions                |
-+--------------------------------+-------------------------------------------------------------+
-| `fix_inbox_counts`             | recalculates response counts in the user inboxes            |
-+--------------------------------+-------------------------------------------------------------+
-| `fix_revisionless_posts`       | adds a revision record to posts that lack them              |
-+--------------------------------+-------------------------------------------------------------+
-| `fix_question_tags`            | takes tag names from the record on the question table       |
-|                                | and stores them in the tag table. This defect may show when |
-|                                | the server process is interrupted after the question was    |
-|                                | saved, but tags were not updated, and the symptom is that   |
-|                                | the question cannot be found via the tag search.            |
-+--------------------------------+-------------------------------------------------------------+
++------------------------------------------+-------------------------------------------------------------+
+| command                                  | purpose                                                     |
++==========================================+=============================================================+
+| `add_missing_subscriptions`              | adds default values of email subscription settings to users |
+|                                          | that lack them                                              |
++------------------------------------------+-------------------------------------------------------------+
+| `askbot_delete_orphan_group_memberships` | deletes group membeshship records that are not linked to    |
+|                                          | any group                                                   |
++------------------------------------------+-------------------------------------------------------------+
+| `fix_answer_counts`                      | recalculates answer counts for all questions                |
++------------------------------------------+-------------------------------------------------------------+
+| `fix_inbox_counts`                       | recalculates response counts in the user inboxes            |
++------------------------------------------+-------------------------------------------------------------+
+| `fix_revisionless_posts`                 | adds a revision record to posts that lack them              |
++------------------------------------------+-------------------------------------------------------------+
+| `askbot_fix_tags`                        | takes tag names from the record on the question table       |
+|                                          | and stores them in the tag table. This defect may show when |
+|                                          | the server process is interrupted after the question was    |
+|                                          | saved, but tags were not updated, and the symptom is that   |
+|                                          | the question cannot be found via the tag search.            |
++------------------------------------------+-------------------------------------------------------------+
 
-The above commands are safe to run at any time, also they do not require 
+The above commands are safe to run at any time, also they do not require
 additional parameters. In the future all these will be replaced with just one simple command.
 
 Developer commands

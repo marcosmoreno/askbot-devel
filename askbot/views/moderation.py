@@ -1,35 +1,28 @@
+from django.http import Http404
+from django.utils.text import format_lazy
+from django.utils.translation import ngettext
+from django.utils.translation import gettext as _
+from django.conf import settings as django_settings
+from django.contrib.auth.decorators import login_required
+from django.contrib.contenttypes.models import ContentType
+from django.db.models import Q
+from django.shortcuts import render
+from django.views.decorators import csrf
+from django.utils.encoding import force_str
+from django.core import exceptions
 from askbot.utils import decorators
 from askbot.utils.html import sanitize_html
 from askbot.utils.functions import decode_and_loads
 from askbot import const
 from askbot.conf import settings as askbot_settings
 from askbot import models
-from askbot import mail
-from datetime import datetime
-from django.http import Http404
-from django.utils.translation import string_concat
-from django.utils.translation import ungettext
-from django.utils.translation import ugettext as _
-from django.template.loader import get_template
-from django.conf import settings as django_settings
-from django.contrib.auth.decorators import login_required
-from django.contrib.contenttypes.models import ContentType
-from django.db.models import Q
-from django.utils.encoding import force_text
-from django.shortcuts import render
-from django.template import RequestContext
-from django.views.decorators import csrf
-from django.utils.encoding import force_text
-from django.core import exceptions
-import simplejson
 
 #some utility functions
 def get_object(memo):
     content_object = memo.activity.content_object
     if isinstance(content_object, models.PostRevision):
         return content_object.post
-    else:
-        return content_object
+    return content_object
 
 
 def get_revision_set(memo_set):
@@ -56,10 +49,9 @@ def expand_revision_set(revs):
     diff_count = more_revs.count() - revs.count()
     if diff_count == 0:
         return revs
-    elif diff_count > 0:
+    if diff_count > 0:
         return expand_revision_set(more_revs)
-    else:
-        raise ValueError('expanded revisions set smaller then the original')
+    raise ValueError('expanded revisions set smaller then the original')
 
 
 def get_revision_ips_and_authors(revs):
@@ -122,10 +114,8 @@ def exclude_admins(users):
 
 def concat_messages(message1, message2):
     if message1:
-        message = string_concat(message1, ', ')
-        return string_concat(message, message2)
-    else:
-        return message2
+        return format_lazy('{}, {}', message1, message2)
+    return message2
 
 
 def get_activity_types():
@@ -153,7 +143,6 @@ def moderation_queue(request):
     memo_set = memo_set.select_related(
                     'activity',
                     'activity__content_type',
-                    'activity__object_id',
                     'activity__question__thread',
                     'activity__user'
                 ).order_by(
@@ -161,7 +150,7 @@ def moderation_queue(request):
                 )[:const.USER_VIEW_DATA_SIZE]
 
     #3) "package" data for the output
-    queue = list()
+    queue = []
     for memo in memo_set:
         obj = memo.activity.content_object
         if obj is None:
@@ -199,14 +188,11 @@ def moderation_queue(request):
         }
         queue.append(item)
 
-    queue.sort(lambda x,y: cmp(y['timestamp'], x['timestamp']))
+    queue.sort(key=lambda x: x['timestamp'], reverse=True)
     reject_reasons = models.PostFlagReason.objects.all().order_by('title')
-    data = {
-        'active_tab': 'users',
-        'page_class': 'moderation-queue-page',
-        'post_reject_reasons': reject_reasons,
-        'messages' : queue,
-    }
+    data = {'active_tab': 'users',
+            'post_reject_reasons': reject_reasons,
+            'queue' : queue}
     template = 'moderation/queue.html'
     return render(request, template, data)
 
@@ -215,7 +201,7 @@ def moderation_queue(request):
 @decorators.post_only
 @decorators.ajax_only
 def moderate_post_edits(request):
-    if request.user.is_anonymous():
+    if request.user.is_anonymous:
         raise exceptions.PermissionDenied()
     if not request.user.is_administrator_or_moderator():
         raise exceptions.PermissionDenied()
@@ -258,18 +244,23 @@ def moderate_post_edits(request):
                         num_posts += 1
 
             if num_posts > 0:
-                posts_message = ungettext('%d post approved', '%d posts approved', num_posts) % num_posts
+                posts_message = ngettext('%d post approved',
+                                          '%d posts approved',
+                                          num_posts) % num_posts
                 result['message'] = concat_messages(result['message'], posts_message)
 
         if 'users' in post_data['items']:
             editors = exclude_admins(get_editors(memo_set))
-            assert(request.user not in editors)
+            assert request.user not in editors
             for editor in editors:
-                editor.set_status('a')
+                if not editor.is_fake: # fake user accounts should not be pre-approved
+                    editor.set_status('a')
 
             num_users = len(editors)
             if num_users:
-                users_message = ungettext('%d user approved', '%d users approved', num_users) % num_users
+                users_message = ngettext('%d user approved',
+                                          '%d users approved',
+                                          num_users) % num_users
                 result['message'] = concat_messages(result['message'], users_message)
 
     elif post_data['action'] == 'decline-with-reason':
@@ -290,7 +281,7 @@ def moderate_post_edits(request):
 
         #message to moderator
         if num_posts:
-            posts_message = ungettext('%d post deleted', '%d posts deleted', num_posts) % num_posts
+            posts_message = ngettext('%d post deleted', '%d posts deleted', num_posts) % num_posts
             result['message'] = concat_messages(result['message'], posts_message)
 
     elif post_data['action'] == 'block':
@@ -304,9 +295,9 @@ def moderate_post_edits(request):
         # so we use a "spider" algorithm to find posts, users and IPs to block.
         # once we find users, posts and IPs, we block all of them summarily.
         if moderate_ips and 'ips' in post_data['items']:
-            assert('users' in post_data['items'])
-            assert('posts' in post_data['items'])
-            assert(len(post_data['items']) == 3)
+            assert 'users' in post_data['items']
+            assert 'posts' in post_data['items']
+            assert len(post_data['items']) == 3
 
             revs = get_revision_set(memo_set)
             revs = expand_revision_set(revs)
@@ -328,8 +319,8 @@ def moderate_post_edits(request):
             already_blocked.update(permanent=True)
             already_blocked_ips = already_blocked.values_list('ip', flat=True)
             ips = ips - set(already_blocked_ips)
-            for ip in ips:
-                cache = Cache(ip=ip, permanent=True)
+            for ip_addr in ips:
+                cache = Cache(ip=ip_addr, permanent=True)
                 cache.save()
 
             #block users and all their content
@@ -340,14 +331,15 @@ def moderate_post_edits(request):
                     user.set_status('b')
                     num_users += 1
                 #delete all content by the user
-                num_posts += request.user.delete_all_content_authored_by_user(user)
+                num_posts += request.user.delete_all_content_authored_by_user(
+                                                            user, mark_as_spam=True)
 
             num_ips = len(ips)
 
         elif 'users' in post_data['items']:
             memo_set = set(memo_set)#evaluate memo_set before deleting content
             editors = exclude_admins(get_editors(memo_set))
-            assert(request.user not in editors)
+            assert request.user not in editors
             num_users = 0
             for editor in editors:
                 #block user
@@ -355,22 +347,23 @@ def moderate_post_edits(request):
                     editor.set_status('b')
                     num_users += 1
                 #delete all content by the user
-                num_posts += request.user.delete_all_content_authored_by_user(editor)
+                num_posts += request.user.delete_all_content_authored_by_user(
+                                                            editor, mark_as_spam=True)
 
         if num_ips:
-            ips_message = ungettext('%d ip blocked', '%d ips blocked', num_ips) % num_ips
+            ips_message = ngettext('%d ip blocked', '%d ips blocked', num_ips) % num_ips
             result['message'] = concat_messages(result['message'], ips_message)
 
         if num_users:
-            users_message = ungettext('%d user blocked', '%d users blocked', num_users) % num_users
+            users_message = ngettext('%d user blocked', '%d users blocked', num_users) % num_users
             result['message'] = concat_messages(result['message'], users_message)
 
         if num_posts:
-            posts_message = ungettext('%d post deleted', '%d posts deleted', num_posts) % num_posts
+            posts_message = ngettext('%d post deleted', '%d posts deleted', num_posts) % num_posts
             result['message'] = concat_messages(result['message'], posts_message)
 
     result['memo_ids'] = [memo.id for memo in memo_set]
-    result['message'] = force_text(result['message'])
+    result['message'] = force_str(result['message'])
 
     #delete items from the moderation queue
     act_ids = [memo.activity_id for memo in memo_set]

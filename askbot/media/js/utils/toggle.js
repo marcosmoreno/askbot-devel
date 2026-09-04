@@ -109,9 +109,9 @@ Toggle.prototype.decorate = function (element) {
 
     //detect state and save it
     if (this.isCheckBox()) {
-        this._state = this._state || (element.is(':checked') ? 'on-state' : 'off-state');
+        this._state = element.is(':checked') ? 'on-state' : 'off-state';
     } else {
-        this._state = this._state || (element.data('isOn') ? 'on-state' : 'off-state');
+        this._state = element.data('isOn') ? 'on-state' : this._state;
     }
     this.setState(this._state);
 

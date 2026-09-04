@@ -1,10 +1,11 @@
-from django.core.management.base import NoArgsCommand
+
+from django.core.management import BaseCommand
 from askbot.utils.console import ProgressBar
 from askbot.models import Activity
 from askbot import const
 
-class Command(NoArgsCommand):
-    def handle_noargs(self, **options):
+class Command(BaseCommand):
+    def handle(self, **options):
         acts = Activity.objects.all()
         deleted_count = 0
         message = "Searching for context-less activity objects:"
@@ -18,6 +19,6 @@ class Command(NoArgsCommand):
                 act.delete()
 
         if deleted_count:
-            print "%d activity objects deleted" % deleted_count
+            print("%d activity objects deleted" % deleted_count)
         else:
-            print "None found"
+            print("None found")

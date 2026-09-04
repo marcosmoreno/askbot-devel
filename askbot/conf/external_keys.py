@@ -2,8 +2,8 @@
 from askbot import const
 from askbot.conf.settings_wrapper import settings
 from askbot.conf.super_groups import EXTERNAL_SERVICES
-from askbot.deps import livesettings
-from django.utils.translation import ugettext_lazy as _
+from livesettings import values as livesettings
+from django.utils.translation import gettext_lazy as _
 from django.conf import settings as django_settings
 
 EXTERNAL_KEYS = livesettings.ConfigurationGroup(
@@ -17,6 +17,7 @@ settings.register(
         EXTERNAL_KEYS,
         'GOOGLE_SITEMAP_CODE',
         description=_('Google site verification key'),
+        default='',
         help_text=_(
                         'This key helps google index your site '
                         'please obtain is at '
@@ -161,7 +162,6 @@ settings.register(
     )
 )
 
-
 settings.register(
     livesettings.StringValue(
         EXTERNAL_KEYS,
@@ -201,5 +201,89 @@ settings.register(
         EXTERNAL_KEYS,
         'IDENTICA_SECRET',
         description=_('ident.ca consumer secret'),
+    )
+)
+
+settings.register(
+    livesettings.StringValue(
+        EXTERNAL_KEYS,
+        'YAMMER_KEY',
+        description=_('Yammer client id'),
+        help_text=_(
+            'Please register your client application at <a href="%(url)s">'
+            'yammer applications site</a>'
+        ) % {'url': const.DEPENDENCY_URLS['yammer-apps']},
+
+    )
+)
+
+settings.register(
+    livesettings.StringValue(
+        EXTERNAL_KEYS,
+        'YAMMER_SECRET',
+        description=_('Yammer secret key'),
+    )
+)
+
+settings.register(
+    livesettings.StringValue(
+        EXTERNAL_KEYS,
+        'WINDOWS_LIVE_KEY',
+        description=_('Windows Live client id'),
+        help_text=_(
+            'Please register your client application at <a href="%(url)s">'
+            'windows applications site</a>'
+        ) % {'url': const.DEPENDENCY_URLS['windows-live-apps']},
+
+    )
+)
+
+settings.register(
+    livesettings.StringValue(
+        EXTERNAL_KEYS,
+        'WINDOWS_LIVE_SECRET',
+        description=_('Windows Live secret key'),
+    )
+)
+
+settings.register(
+    livesettings.StringValue(
+        EXTERNAL_KEYS,
+        'MICROSOFT_AZURE_KEY',
+        description=_('Microsoft Azure client id'),
+        help_text=_(
+            'Please register your client application at <a href="%(url)s">'
+            'windows applications site</a>'
+        ) % {'url': const.DEPENDENCY_URLS['microsoft-azure-apps']},
+
+    )
+)
+
+settings.register(
+    livesettings.StringValue(
+        EXTERNAL_KEYS,
+        'MICROSOFT_AZURE_SECRET',
+        description=_('Microsoft Azure secret key'),
+    )
+)
+
+settings.register(
+    livesettings.StringValue(
+        EXTERNAL_KEYS,
+        'GITHUB_KEY',
+        description=_('GitHub OAuth App Client ID'),
+        help_text=_(
+            'Please register your client application at <a href="%(url)s">'
+            'Github OAuth Apps site</a>'
+        ) % {'url': 'https://github.com/settings/developers'},
+
+    )
+)
+
+settings.register(
+    livesettings.StringValue(
+        EXTERNAL_KEYS,
+        'GITHUB_SECRET',
+        description=_('GitHub OAuth App Client Secret'),
     )
 )

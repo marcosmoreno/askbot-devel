@@ -3,11 +3,11 @@ import re
 import sys
 from django.core.exceptions import ImproperlyConfigured
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.conf import settings as django_settings
 from django.template import Context
 from django.template.loader import get_template
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from askbot.models import ReplyAddress, Group, Tag
 from askbot import mail
 from askbot.conf import settings as askbot_settings
@@ -20,7 +20,7 @@ try:
 except ImportError:
     raise ImproperlyConfigured("""Askbot: to enable posting by email,
 install modules Lamson and django-lamson:
-pip install Lamson 
+pip install Lamson
 pip install django-lamson
 """)
 
@@ -169,11 +169,11 @@ def process_reply(func):
             error = _("You were replying to an email address\
              unknown to the system or you were replying from a different address from the one where you\
              received the notification.")
-        except Exception, e:
+        except Exception as e:
             import sys
-            sys.stderr.write(unicode(e).encode('utf-8'))
+            sys.stderr.write(str(e))
             import traceback
-            sys.stderr.write(unicode(traceback.format_exc()).encode('utf-8'))
+            sys.stderr.write(str(traceback.format_exc()))
 
         if error is not None:
             from askbot.mail.messages import ReplyByEmailError
@@ -199,17 +199,15 @@ def ASK(message, host = None, addr = None):
 
     if DEBUG_EMAIL:
         sys.stderr.write(
-            (u'Received email from %s\n' % from_address).encode('utf-8')
+            ('Received email from %s\n' % from_address).encode('utf-8')
         )
 
 
     #why lamson does not give it normally?
     subject = message['Subject'].strip('\n\t ')
-    body_text, stored_files, unused = mail.process_parts(parts)
+    body_text, _ = mail.process_parts(parts)
     if addr == 'ask':
-        mail.process_emailed_question(
-            from_address, subject, body_text, stored_files
-        )
+        mail.process_emailed_question(from_address, subject, body_text)
     else:
         #this is the Ask the group branch
         if askbot_settings.GROUP_EMAIL_ADDRESSES_ENABLED == False:
@@ -217,7 +215,7 @@ def ASK(message, host = None, addr = None):
         try:
             group = Group.objects.get(name__iexact=addr)
             mail.process_emailed_question(
-                from_address, subject, body_text, stored_files,
+                from_address, subject, body_text,
                 group_id = group.id
             )
         except Group.DoesNotExist:
@@ -242,11 +240,11 @@ def VALIDATE_EMAIL(
     reply_code = reply_address_object.address
 
     if DEBUG_EMAIL:
-        msg = u'Received email validation from %s\n' % from_address
+        msg = 'Received email validation from %s\n' % from_address
         sys.stderr.write(msg.encode('utf-8'))
 
     try:
-        content, stored_files, signature = mail.process_parts(parts, reply_code)
+        content, signature = mail.process_parts(parts, reply_code)
 
         user = reply_address_object.user
 
@@ -283,12 +281,12 @@ def PROCESS(
     the email, including the text body and the file attachments"""
     if DEBUG_EMAIL:
         sys.stderr.write(
-            (u'Received reply from %s\n' % from_address).encode('utf-8')
+            ('Received reply from %s\n' % from_address).encode('utf-8')
         )
     #1) get actual email content
     #   todo: factor this out into the process_reply decorator
     reply_code = reply_address_object.address
-    body_text, stored_files, signature = mail.process_parts(parts, reply_code, from_address)
+    body_text, signature = mail.process_parts(parts, reply_code, from_address)
 
     #2) process body text and email signature
     user = reply_address_object.user
@@ -324,5 +322,5 @@ def PROCESS(
         email.send([from_address,])
 
         if DEBUG_EMAIL:
-            msg = u'Sending welcome mail to %s\n' % from_address
+            msg = 'Sending welcome mail to %s\n' % from_address
             sys.stderr.write(msg.encode('utf-8'))

@@ -1,19 +1,18 @@
 import datetime
-import pytz
 import re
 import time
-import urllib
-from coffin import template as coffin_template
+import urllib.request, urllib.parse, urllib.error
+import zoneinfo
 from bs4 import BeautifulSoup
 from django.core import exceptions as django_exceptions
-from django.utils.encoding import force_unicode
-from django.utils.translation import ugettext as _
+from django.utils.encoding import force_str
+from django.utils.translation import gettext as _
 from django.utils.translation import get_language as django_get_language
 from django.contrib.humanize.templatetags import humanize
 from django.template import defaultfilters
-from django.core.urlresolvers import reverse, resolve
+from django.urls import reverse, resolve
 from django.http import Http404
-import simplejson
+import json
 from django.utils import timezone
 from django.utils.text import Truncator
 from askbot import exceptions as askbot_exceptions
@@ -29,24 +28,41 @@ from askbot.utils.markup import markdown_input_converter
 from askbot.utils.markup import convert_text as _convert_text
 from askbot.utils.slug import slugify
 from askbot.utils.pluralization import py_pluralize as _py_pluralize
-from askbot.shims.django_shims import ResolverMatch
 
 from django_countries import countries
 from django_countries import settings as countries_settings
 
-register = coffin_template.Library()
+from django_jinja import library as d_j_library
 
-absolutize_urls = register.filter(absolutize_urls)
+# Jinja 2 way to define a safe string
+import markupsafe
 
-TIMEZONE_STR = pytz.timezone(
-                    django_settings.TIME_ZONE
-                ).localize(
-                    datetime.datetime.now()
-                ).strftime('%z')
+class template:
+    @classmethod
+    def Library(cls):
+        return d_j_library
+
+register = template.Library()
+
+TZINFO = zoneinfo.ZoneInfo(django_settings.TIME_ZONE)
+TIMEZONE_STR = datetime.datetime.now().replace(tzinfo=TZINFO).strftime('%z')
 
 @register.filter
 def add_tz_offset(datetime_object):
     return str(datetime_object) + ' ' + TIMEZONE_STR
+
+@register.filter
+def is_admin_tag(tag):
+    if not askbot_settings.ADMIN_TAGS_ENABLED:
+        return False
+
+    def admin_tags_lower():
+        for tag in askbot_settings.ADMIN_TAGS.split():
+            yield tag.lower()
+
+    if tag.lower() in admin_tags_lower():
+        return True
+    return False
 
 @register.filter
 def as_js_bool(some_object):
@@ -56,7 +72,7 @@ def as_js_bool(some_object):
 
 @register.filter
 def as_json(data):
-    return simplejson.dumps(data)
+    return json.dumps(data)
 
 @register.filter
 def is_current_language(lang):
@@ -68,10 +84,6 @@ def is_empty_editor_value(value):
         return True
     if str(value).strip() == '':
         return True
-    #tinymce uses a weird sentinel placeholder
-    if askbot_settings.EDITOR_TYPE == 'tinymce':
-        soup = BeautifulSoup(value, 'html5lib')
-        return soup.getText().strip() == ''
     return False
 
 @register.filter
@@ -81,9 +93,9 @@ def to_int(value):
 @register.filter
 def safe_urlquote(text, quote_plus=False):
     if quote_plus:
-        return urllib.quote_plus(text.encode('utf8'))
+        return urllib.parse.quote_plus(text.encode('utf8'))
     else:
-        return urllib.quote(text.encode('utf8'))
+        return urllib.parse.quote(text.encode('utf8'))
 
 @register.filter
 def show_block_to(block_name, user):
@@ -91,7 +103,7 @@ def show_block_to(block_name, user):
     if block:
         flag_name = block_name + '_ANON_ONLY'
         require_anon = getattr(askbot_settings, flag_name, False)
-        return (require_anon is False) or user.is_anonymous()
+        return (require_anon is False) or user.is_anonymous
     return False
 
 @register.filter
@@ -106,9 +118,13 @@ def strip_tags(text):
 
 @register.filter
 def can_see_private_user_data(viewer, target):
-    if viewer.is_authenticated():
+    if viewer.is_authenticated:
         if viewer == target:
             return True
+        if viewer.is_staff: #staff has access to the admin panel, no point hiding here
+            return True
+        if target.askbot_profile.email_is_confidential:
+            return False
         if viewer.is_administrator_or_moderator():
             #todo: take into account intersection of viewer and target user groups
             return askbot_settings.SHOW_ADMINS_PRIVATE_USER_DATA
@@ -118,7 +134,7 @@ def can_see_private_user_data(viewer, target):
 def clean_login_url(url):
     """pass through, unless user was originally on the logout page"""
     try:
-        resolver_match = ResolverMatch(resolve(url))
+        resolver_match = resolve(url)
         from askbot.views.readers import question
         if resolver_match.func == question:
             return url
@@ -135,10 +151,10 @@ def transurl(url):
         url.decode('ascii')
     except UnicodeError:
         raise ValueError(
-            u'string %s is not good for url - must be ascii' % url
+            'string %s is not good for url - must be ascii' % url
         )
     if django_settings.ASKBOT_TRANSLATE_URL:
-        return urllib.quote(_(url).encode('utf-8'))
+        return urllib.parse.quote(_(url).encode('utf-8'))
     return url
 
 @register.filter
@@ -146,8 +162,8 @@ def truncate_html_post(post_html):
     """truncates html if it is longer than 100 words"""
     post_html = Truncator(post_html).words(5, truncate=' ...', html=True)
     post_html = '<div class="truncated-post">' + post_html
-    post_html += '<span class="expander">(<a>' + _('more') + '</a>)</span>'
-    post_html += '<div class="clearfix"></div></div>'
+    post_html += '<span class="js-expander">(<a>' + _('more') + '</a>)</span>'
+    post_html += '</div>'
     return post_html
 
 @register.filter
@@ -161,7 +177,7 @@ def country_flag_url(country_code):
 
 @register.filter
 def collapse(input):
-    input = unicode(input)
+    input = str(input)
     return ' '.join(input.split())
 
 
@@ -213,26 +229,22 @@ slugify = register.filter(slugify)
 
 register.filter(
             name = 'intcomma',
-            filter_func = humanize.intcomma,
-            jinja2_only = True
+            fn = humanize.intcomma
         )
 
 register.filter(
             name = 'urlencode',
-            filter_func = defaultfilters.urlencode,
-            jinja2_only = True
+            fn = defaultfilters.urlencode
         )
 
 register.filter(
             name = 'linebreaks',
-            filter_func = defaultfilters.linebreaks,
-            jinja2_only = True
+            fn = defaultfilters.linebreaks
         )
 
 register.filter(
             name = 'default_if_none',
-            filter_func = defaultfilters.default_if_none,
-            jinja2_only = True
+            fn = defaultfilters.default_if_none
         )
 
 def make_template_filter_from_permission_assertion(
@@ -248,7 +260,7 @@ def make_template_filter_from_permission_assertion(
         if askbot_settings.ALWAYS_SHOW_ALL_UI_FUNCTIONS:
             return True
 
-        if user.is_anonymous():
+        if user.is_anonymous:
             return False
 
         assertion = getattr(user, assertion_name)
@@ -270,10 +282,10 @@ def make_template_filter_from_permission_assertion(
     register.filter(filter_name, filter_function)
     return filter_function
 
-
 @register.filter
 def can_moderate_user(user, other_user):
-    if user.is_authenticated() and user.can_moderate_user(other_user):
+    """True, if user can moderate account of `other_user`"""
+    if user.is_authenticated and user.can_moderate_user(other_user):
         return True
     return False
 
@@ -350,7 +362,7 @@ def can_see_offensive_flags(user, post):
 
     suspended or blocked users cannot see flags
     """
-    if user.is_authenticated():
+    if user.is_authenticated:
         if user.pk == post.author_id:
             return True
         if user.reputation >= askbot_settings.MIN_REP_TO_VIEW_OFFENSIVE_FLAGS:
@@ -366,8 +378,8 @@ def can_see_offensive_flags(user, post):
 register.filter('can_see_offensive_flags', can_see_offensive_flags)
 
 @register.filter
-def humanize_counter(number):
-    if number == 0:
+def humanize_counter(number, humanize_zero=False):
+    if humanize_zero and number == 0:
         return _('no')
     elif number >= 1000:
         number = number/1000
@@ -400,10 +412,10 @@ def sub_vars(text, user=None):
     sitename_re = re.compile(r'\{\{\s*SITE_NAME\s*\}\}')
     sitelink_re = re.compile(r'\{\{\s*SITE_LINK\s*\}\}')
 
-    text = force_unicode(text)
+    text = force_str(text)
 
     if user:
-        if user.is_anonymous():
+        if user.is_anonymous:
             username = _('Visitor')
         else:
             username = user.username
@@ -423,3 +435,79 @@ def convert_markdown(text):
 def convert_text(text):
     """converts text with the currently selected editor"""
     return _convert_text(text)
+
+# escapejs somehow got lost along the way. The following is from
+# https://stackoverflow.com/a/18900930/3185053
+_js_escapes = {
+        '\\': '\\u005C',
+        '\'': '\\u0027',
+        '"': '\\u0022',
+        '>': '\\u003E',
+        '<': '\\u003C',
+        '&': '\\u0026',
+        '=': '\\u003D',
+        '-': '\\u002D',
+        ';': '\\u003B',
+        u'\u2028': '\\u2028',
+        u'\u2029': '\\u2029'
+}
+# Escape every ASCII character with a value less than 32.
+_js_escapes.update(('%c' % z, '\\u%04X' % z) for z in range(32))
+
+@register.filter
+def escapejs(value):
+    return markupsafe.Markup("".join(_js_escapes.get(l, l) for l in value))
+
+
+# with coffin we also threw out the url filter. in Coffin-0.3.8 there is this
+# comment on the url filter:
+# > This is an alternative to the {% url %} tag. It comes from a time
+# > before Coffin had a port of the tag.
+# Maybe get rid of the filter as it seems outdated, non-standard and does not
+# yield any benefits?
+# This code was shamelessly copied from Coffin-0.3.8.
+
+@register.filter
+def url(viewname, *args, **kwargs):
+    from django.urls import reverse, NoReverseMatch
+
+    # Try to look up the URL twice: once given the view name,
+    # and again relative to what we guess is the "main" app.
+    url = ''
+    try:
+        url = reverse(viewname, args=args, kwargs=kwargs,
+            current_app=None)
+    except NoReverseMatch:
+        projectname = django_settings.SETTINGS_MODULE.split('.')[0]
+        try:
+            url = reverse(projectname + '.' + viewname,
+                          args=args, kwargs=kwargs)
+        except NoReverseMatch:
+                raise
+    return url
+
+@register.filter
+def strip_website_url(url):
+    if url.startswith('https://'):
+        url = url.lstrip('https://')
+    elif url.startswith('http://'):
+        url =  url.lstrip('http://')
+    return url.rstrip('/')
+
+
+@register.filter
+def format_time_on_site(timedelta_obj):
+    seconds = timedelta_obj.total_seconds()
+    days = int(seconds // 86400)
+    hours = int((seconds % 86400) // 3600)
+    minutes = int((seconds % 3600) // 60)
+    duration = ''
+    if days > 0:    
+        duration += f"{days} days "
+    if hours > 0:
+        duration += f"{hours} hours "
+    if minutes > 0:
+        duration += f"{minutes} mins"
+    if not duration:
+        duration = '<1 min'
+    return duration

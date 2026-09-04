@@ -11,8 +11,10 @@ def create_message (request, message):
     Create a message in the current session.
 
     """
-    assert hasattr(request, 'session'), "django-session-messages requires session middleware to be installed. Edit your MIDDLEWARE_CLASSES setting to insert 'django.contrib.sessions.middleware.SessionMiddleware'."
+    assert hasattr(request, 'session'), "django-session-messages requires session middleware to be installed. Edit your MIDDLEWARE setting to insert 'django.contrib.sessions.middleware.SessionMiddleware'."
 
+    # Force lazy translation strings to str for JSON session serialization
+    message = str(message)
     try:
         request.session['messages'].append(message)
     except KeyError:
@@ -25,11 +27,11 @@ def get_and_delete_messages (request, include_auth=False):
     Optionally also fetches user messages from django.contrib.auth.
 
     """
-    assert hasattr(request, 'session'), "django-session-messages requires session middleware to be installed. Edit your MIDDLEWARE_CLASSES setting to insert 'django.contrib.sessions.middleware.SessionMiddleware'."
+    assert hasattr(request, 'session'), "django-session-messages requires session middleware to be installed. Edit your MIDDLEWARE setting to insert 'django.contrib.sessions.middleware.SessionMiddleware'."
 
     messages = request.session.pop('messages', [])
 
-    if include_auth and request.user.is_authenticated():
+    if include_auth and request.user.is_authenticated:
         messages.extend(request.user.get_and_delete_messages())
 
     return messages

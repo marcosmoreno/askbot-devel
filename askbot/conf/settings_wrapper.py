@@ -13,33 +13,32 @@ askbot_settings.BLAH
 NOTE that at the moment there is distinction between settings
 (django settings) and askbot_settings (forum.deps.livesettings)
 
-the value will be taken from askbot.deps.livesettings database or cache
+the value will be taken from livesettings database or cache
 note that during compilation phase database is not accessible
 for the most part, so actual values are reliably available only
 at run time
 
 askbot.deps.livesettings is a module developed for satchmo project
 """
-import logging
-
 from django.conf import settings as django_settings
 from django.core.cache import cache
-from django.contrib.sites.models import Site
-from django.utils.encoding import force_unicode
+from django.core.files import uploadedfile
+from django.utils.encoding import force_str
 from django.utils.functional import lazy
 from django.utils.translation import get_language
-from django.utils.translation import string_concat
-from django.utils.translation import ugettext_lazy as _
+from django.utils.text import format_lazy
+from django.utils.translation import gettext_lazy as _
 
 import askbot
-from askbot.deps.livesettings import SortedDotDict, config_register
-from askbot.deps.livesettings.functions import config_get
-from askbot.deps.livesettings import signals
+from livesettings.values import SortedDotDict
+from livesettings.functions import config_register
+from livesettings.functions import config_get
+from livesettings import signals
 from askbot.utils.functions import format_setting_name
 
 
 def assert_setting_info_correct(info):
-    assert isinstance(info, tuple), u'must be tuple, %s found' % unicode(info)
+    assert isinstance(info, tuple), 'must be tuple, %s found' % str(info)
     assert len(info) in (3, 4), 'setting tuple must have three or four elements'
     assert isinstance(info[0], str)
     assert isinstance(info[1], str)
@@ -83,13 +82,13 @@ class ConfigSettings(object):
 
     def get_description(self, key):
         """returns descriptive title of the setting"""
-        return unicode(getattr(self.__instance, key).description)
+        return str(getattr(self.__instance, key).description)
 
     def reset(self, key):
         """returns setting to the default value"""
         self.update(key, self.get_default(key))
 
-    def update(self, key, value, language_code=None):
+    def update(self, key, value: uploadedfile.UploadedFile, language_code=None):
         try:
             setting = config_get(self.__group_map[key], key)
             if setting.localized:
@@ -99,7 +98,7 @@ class ConfigSettings(object):
             setting.update(value, lang)
 
         except:
-            from askbot.deps.livesettings.models import Setting
+            from livesettings.models import Setting
             lang_postfix = '_' + get_language().upper()
             # First try localized setting
             try:
@@ -137,13 +136,13 @@ class ConfigSettings(object):
         setting_name = data[1]
 
         link = internal_link(
-            'group_settings',
+            'livesettings_group',
             setting_name,  # TODO: better use description
             kwargs={'group': group_name},
             anchor='id_%s__%s__%s' % (group_name, setting_name, get_language())
         )
         if len(data) == 4:
-            return force_unicode(string_concat(link, ' (', data[3], ')'))
+            return force_str(format_lazy('{} ({})',link, data[3]))
         return link
 
     def get_related_settings_info(self, *requirements):
@@ -154,7 +153,7 @@ class ConfigSettings(object):
         """
         def _func():
             # error checking
-            map(assert_setting_info_correct, requirements)
+            list(map(assert_setting_info_correct, requirements))
             required = list()
             optional = list()
             for req in requirements:
@@ -163,9 +162,9 @@ class ConfigSettings(object):
                 else:
                     optional.append(req)
 
-            required_links = map(lambda v: self.get_setting_url(v), required)
-            optional_links = map(lambda v: self.get_setting_url(v), optional)
-                
+            required_links = [self.get_setting_url(v) for v in required]
+            optional_links = [self.get_setting_url(v) for v in optional]
+
             if required_links and optional_links:
                 return _(
                     'There are required related settings: '
@@ -189,7 +188,7 @@ class ConfigSettings(object):
                 }
             else:
                 return ''
-        return lazy(_func, unicode)()
+        return lazy(_func, str)()
 
     def as_dict(self):
         cache_key = get_bulk_cache_key()
@@ -197,7 +196,7 @@ class ConfigSettings(object):
 
     @classmethod
     def precache_all_values(cls):
-        from askbot.deps.livesettings.models import Setting, LongSetting
+        from livesettings.models import Setting, LongSetting
         from django.contrib.sites.models import Site
         settings = Setting.objects.filter(site=Site.objects.get_current())
         settings = settings.select_related('site')
@@ -218,10 +217,11 @@ class ConfigSettings(object):
     def prime_cache(cls, cache_key, **kwargs):
         """reload all settings into cache as dictionary
         """
+        from django.contrib.sites.models import Site
         db_keys = cls.precache_all_values()
 
         out = dict()
-        for key in cls.__instance.keys():
+        for key in list(cls.__instance.keys()):
             if hasattr(django_settings, 'ASKBOT_' + key):
                 value = getattr(django_settings, 'ASKBOT_' + key)
             else:
@@ -237,7 +237,6 @@ class ConfigSettings(object):
                     if hasattr(setting_value, 'default'):
                         value = setting_value.default
                     else:
-                        logging.critical('setting %s lacks default value', key)
                         value = setting_value.value
                     db_setting = setting_value.make_setting_with_value(value)
                     db_setting.site = Site.objects.get_current()
@@ -267,7 +266,7 @@ def cached_value_update_handler(setting=None, new_value=None,
                                 language_code=None, *args, **kwargs):
     key = setting.key
     if not setting.localized and askbot.is_multilingual():
-        languages = dict(django_settings.LANGUAGES).keys()
+        languages = list(dict(django_settings.LANGUAGES).keys())
         for lang in languages:
             update_cached_value(key, new_value, lang)
     else:

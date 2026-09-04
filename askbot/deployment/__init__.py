@@ -1,231 +1,356 @@
 """
-module for deploying askbot
+Creates a development/evaluation deployment.
+Initializes all files necessary for the Django project,
+and does not set up anything to interface with the
+web-facing server. The latter is the responsibility
+of the deployment scripts (e.g. Dockerfile).
 """
+
 import os.path
 import sys
-import django
-from optparse import OptionParser
-from askbot.deployment import messages
-from askbot.deployment.messages import print_message
-from askbot.deployment import path_utils
-from askbot.utils import console
+from argparse import ArgumentParser
+from django.core.exceptions import ValidationError
+
+from askbot.deployment import const
+from askbot.deployment import deployers
+from askbot.deployment.validators import ParamsValidator
+from askbot.deployment.console import Console
+from askbot.deployment.exceptions import DeploymentError
 from askbot.utils.functions import generate_random_key
 
-DATABASE_ENGINE_CHOICES = ('1', '2', '3', '4')
+DESCRIPTION = """Creates files for the django project of Askbot.
 
-def askbot_setup():
-    """basic deployment procedure
-    asks user several questions, then either creates
-    new deployment (in the case of new installation)
-    or gives hints on how to add askbot to an existing
-    Django project
-    """
-    parser = OptionParser(usage = "%prog [options]")
+The goal of this script is to create a working project and
+sample settings. This setup is sufficient for the development.
 
-    parser.add_option(
-                "-v", "--verbose",
-                dest = "verbosity",
-                type = "int",
-                default = 1,
-                help = "verbosity level available values 0, 1, 2."
-            )
+Use the produced settings.py as a template for your production deployment.
 
-    parser.add_option(
-                "-n", "--dir-name",
-                dest = "dir_name",
-                default = None,
-                help = "Directory where you want to install."
-            )
+If you wish to contribute to a more functional deployment script
+have a look at the Dockerfile.
+"""
 
-    parser.add_option(
-                '-e', '--db-engine',
-                dest='database_engine',
-                action='store',
-                type='choice',
-                choices=DATABASE_ENGINE_CHOICES,
-                default=None,
-                help='Database engine, type 1 for postgresql, 2 for sqlite, 3 for mysql'
-            )
+class AskbotSetup:
+    """Class that does the job of this module."""
 
-    parser.add_option(
-                "-d", "--db-name",
-                dest = "database_name",
-                default = None,
-                help = "The database name"
-            )
+    ASKBOT_ROOT = os.path.dirname(os.path.dirname(__file__))
+    SOURCE_DIR = 'setup_templates'
 
-    parser.add_option(
-                "-u", "--db-user",
-                dest = "database_user",
-                default = None,
-                help = "The database user"
-            )
+    def __init__(self):
+        self.parser = ArgumentParser(description=DESCRIPTION)
+        self.add_arguments()
 
-    parser.add_option(
-                "-p", "--db-password",
-                dest = "database_password",
-                default = None,
-                help = "the database password"
-            )
+    def add_arguments(self):
+        """Configures the CLI parameters"""
+        self.add_setup_args()
+        self.add_db_args()
+        self.add_site_args()
+        self.add_email_args()
+        # these override some of the detailed settings
+        self.add_settings_snippet_args()
 
-    parser.add_option(
-                "--append-settings",
-                dest = "local_settings",
-                default = '',
-                help = "Extra settings file to append custom settings"
-            )
-
-    parser.add_option(
-                "--force",
-                dest="force",
-                action='store_true',
-                default=False,
-                help = "Force overwrite settings.py file"
-            )
-
-    try:
-        options = parser.parse_args()[0]
-
-        #ask users to give missing parameters
-        #todo: make this more explicit here
-        if options.verbosity >= 1:
-            print messages.DEPLOY_PREAMBLE
-
-        directory = path_utils.clean_directory(options.dir_name)
-        while directory is None:
-            directory = path_utils.get_install_directory(force=options.force)
-        options.dir_name = directory
-
-        if options.database_engine not in DATABASE_ENGINE_CHOICES:
-            options.database_engine = console.choice_dialog(
-                'Please select database engine:\n1 - for postgresql, '
-                '2 - for sqlite, 3 - for mysql, 4 - oracle',
-                choices=DATABASE_ENGINE_CHOICES
-            )
-
-        options_dict = vars(options)
-        if options.force is False:
-            options_dict = collect_missing_options(options_dict)
-
-        database_engine_codes = {
-            '1': 'postgresql_psycopg2',
-            '2': 'sqlite3',
-            '3': 'mysql',
-            '4': 'oracle'
-        }
-        database_engine = database_engine_codes[options.database_engine]
-        options_dict['database_engine'] = database_engine
-
-        deploy_askbot(options_dict)
-
-        if database_engine == 'postgresql_psycopg2':
-            try:
-                import psycopg2
-            except ImportError:
-                print '\nNEXT STEPS: install python binding for postgresql'
-                print 'pip install psycopg2\n'
-        elif database_engine == 'mysql':
-            try:
-                import _mysql
-            except ImportError:
-                print '\nNEXT STEP: install python binding for mysql'
-                print 'pip install mysql-python\n'
-
-    except KeyboardInterrupt:
-        print "\n\nAborted."
-        sys.exit(1)
-
-
-#separated all the directory creation process to make it more useful
-def deploy_askbot(options):
-    """function that creates django project files,
-    all the neccessary directories for askbot,
-    and the log file
-    """
-    create_new_project = False
-    if os.path.exists(options['dir_name']):
-        if path_utils.has_existing_django_project(options['dir_name']):
-            create_new_project = bool(options['force'])
-        else:
-            create_new_project = True
-    else:
-        create_new_project = True
-
-    path_utils.create_path(options['dir_name'])
-
-    if django.VERSION[0] > 1:
-        raise Exception(
-            'Django framework with major version > 1 is not supported'
+    def add_email_args(self):
+        """Settings specific to the email setup"""
+        self.parser.add_argument(
+            '--email-settings',
+            dest='email_settings',
+            action='store',
+            help='Settings snippet for the email - Python code.'
         )
 
-    if django.VERSION[1] < 3:
-        #force people install the django-staticfiles app
-        options['staticfiles_app'] = ''
-    else:
-        options['staticfiles_app'] = "'django.contrib.staticfiles',"
-
-    if django.VERSION[1] <=3:
-        auth_context_processor = 'django.core.context_processors.auth'
-    else:
-        auth_context_processor = 'django.contrib.auth.context_processors.auth'
-    options['auth_context_processor'] = auth_context_processor
-
-    verbosity = options['verbosity']
-
-    path_utils.deploy_into(
-        options['dir_name'],
-        new_project=create_new_project,
-        verbosity=verbosity,
-        context=options
-    )
-
-    help_file = path_utils.get_path_to_help_file()
-
-    if create_new_project:
-        print_message(
-            messages.HOW_TO_DEPLOY_NEW % {'help_file': help_file},
-            verbosity
-        )
-    else:
-        print_message(
-            messages.HOW_TO_ADD_ASKBOT_TO_DJANGO % {'help_file': help_file},
-            verbosity
+        self.parser.add_argument(
+            '--server-email',
+            action='store',
+            dest='server_email',
+            default='',
+            help='Value for the SERVER_EMAIL setting'
         )
 
-def collect_missing_options(options_dict):
-    options_dict['secret_key'] = generate_random_key()
-    if options_dict['database_engine'] == '2':#sqlite
-        if options_dict['database_name']:
-            return options_dict
-        while True:
-            value = console.simple_dialog(
-                            'Please enter database file name'
-                        )
-            database_file_name = None
-            if os.path.isfile(value):
-                message = 'file %s exists, use it anyway?' % value
-                if console.get_yes_or_no(message) == 'yes':
-                    database_file_name = value
-            elif os.path.isdir(value):
-                print '%s is a directory, choose another name' % value
-            elif value in path_utils.FILES_TO_CREATE:
-                print 'name %s cannot be used for the database name' % value
-            elif value == path_utils.LOG_DIR_NAME:
-                print 'name %s cannot be used for the database name' % value
-            else:
-                database_file_name = value
+        self.parser.add_argument(
+            '--default-from-email',
+            action='store',
+            dest='default_from_email',
+            default='',
+            help='Value for the DEFAULT_FROM_EMAIL setting'
+        )
 
-            if database_file_name:
-                options_dict['database_name'] = database_file_name
-                return options_dict
+        self.parser.add_argument(
+            '--email-host-user',
+            action='store',
+            dest='email_host_user',
+            default='',
+            help='Value for the EMAIL_HOST_USER setting'
+        )
 
-    else:#others
-        for key in ('database_name', 'database_user', 'database_password'):
-            if options_dict[key] is None:
-                key_name = key.replace('_', ' ')
-                value = console.simple_dialog(
-                    '\nPlease enter %s' % key_name,
-                    required=True
-                )
-                options_dict[key] = value
-        return options_dict
+        self.parser.add_argument(
+            '--email-host-password',
+            action='store',
+            dest='email_host_password',
+            default='',
+            help='Value for the EMAIL_HOST_PASSWORD setting'
+        )
+
+        self.parser.add_argument(
+            '--email-subject-prefix',
+            action='store',
+            dest='email_subject_prefix',
+            default='',
+            help='Value for the EMAIL_SUBJECT_PREFIX setting'
+        )
+
+        self.parser.add_argument(
+            '--email-host',
+            action='store',
+            dest='email_host',
+            default='',
+            help='Value for the EMAIL_HOST setting'
+        )
+
+        self.parser.add_argument(
+            '--email-port',
+            action='store',
+            dest='email_port',
+            default='',
+            help='Value for the EMAIL_PORT setting'
+        )
+
+        self.parser.add_argument(
+            '--email-use-tls',
+            action='store_true',
+            default=False,
+            dest='email_use_tls',
+            help='Value for the EMAIL_USE_TLS setting'
+        )
+
+        self.parser.add_argument(
+            '--email-backend',
+            action='store',
+            dest='email_backend',
+            default='django.core.mail.backends.smtp.EmailBackend',
+            help='Value for the EMAIL_BACKEND setting'
+        )
+
+    def add_site_args(self):
+        """Settings specific to the workings of the site"""
+        self.parser.add_argument(
+            '--admin-name',
+            action='store',
+            dest='admin_name',
+            help='Name of the site admin'
+        )
+
+        self.parser.add_argument(
+            '--admin-email',
+            action='store',
+            dest='admin_email',
+            help='Admin of the site admin'
+        )
+
+        self.parser.add_argument(
+            '--domain-name',
+            dest='domain_name',
+            action='store',
+            help=const.DOMAIN_NAME_HELP
+        )
+
+        self.parser.add_argument(
+            '--language-code', '-l',
+            dest='language_code',
+            action='store',
+            default='en',
+            help=const.LANGUAGE_CODE_HELP
+        )
+
+        self.parser.add_argument(
+            '--timezone', '-t',
+            dest='timezone',
+            action='store',
+            default='UTC',
+            help='Name of the timezone, for example Europe/Berlin'
+        )
+
+        self.parser.add_argument(
+            '--log-file-path',
+            dest='log_file_path',
+            action='store',
+            default='log/askbot_app.log',
+            help=const.LOG_FILE_PATH_HELP
+        )
+
+    def add_settings_snippet_args(self):
+        """Arguments for the settings snippets.
+        Values of these must be a Python code in the format of the
+        django settings.py file, containing the specific groups of settings.
+        Use of these is intended with the scripted deployments, e.g. - with Docker.
+
+        The values are not validated. It is the responsibility of the user
+        to test the produced settings.py file.
+
+        When provided, these settings completely override corresponding detailed parameters.
+        For example - `--db-settings` if provided, will override --db-name, --db-password, etc.
+        """
+        self.parser.add_argument(
+            '--admin-settings',
+            dest='admin_settings',
+            action='store',
+            help='Settings snippet for the ADMINS and MANAGERS variables - Python code.'
+        )
+        self.parser.add_argument(
+            '--language-settings',
+            dest='language_settings',
+            help='Settings snippet for the language - Python code.'
+        )
+
+        self.parser.add_argument(
+            '--logging-settings',
+            dest='logging_settings',
+            help='Settings snippet for the logging - Python code.'
+        )
+
+        self.parser.add_argument(
+            '--caching-settings',
+            dest='caching_settings',
+            help='Settings snippet for caching - Python code.'
+        )
+
+        self.parser.add_argument(
+            '--append-settings',
+            dest='extra_settings',
+            help='Extra settings snippet - python code - ' + \
+                'appended to the settings.py file - Python code.'
+        )
+
+    def add_db_args(self):
+        """DB parameters for the settings.py"""
+
+        self.parser.add_argument(
+            '--db-settings',
+            dest='database_settings',
+            action='store',
+            help='Database settings snippet - Python code.\n' + \
+                    'If given, all remaining db parameters will be ignored.'
+        )
+
+        self.parser.add_argument(
+            '--db-engine', '-e',
+            dest='database_engine',
+            action='store',
+            choices=[eng[0] for eng in const.DATABASE_ENGINE_CHOICES],
+            help=const.DATABASE_ENGINE_HELP
+        )
+
+        self.parser.add_argument(
+            '--db-name', '-d',
+            dest='database_name',
+            help='Database name'
+        )
+
+        self.parser.add_argument(
+            '--db-user', '-u',
+            dest='database_user',
+            help='Database user name'
+        )
+
+        self.parser.add_argument(
+            '--db-password', '-p',
+            dest='database_password',
+            help='Database password'
+        )
+
+        self.parser.add_argument(
+            '--db-host',
+            dest='database_host',
+            help='Database host'
+        )
+
+        self.parser.add_argument(
+            '--db-port',
+            dest='database_port',
+            help='Database port'
+        )
+
+    def add_setup_args(self):
+        """Control the behaviour of this setup procedure"""
+        self.parser.add_argument(
+            '--root-directory', '-r',
+            dest='root_dir',
+            help=const.ROOT_DIR_HELP
+        )
+
+        self.parser.add_argument(
+            '--proj-name',
+            dest='proj_name',
+            help=const.PROJ_NAME_HELP
+        )
+
+        self.parser.add_argument(
+            '--media-root',
+            dest='media_root',
+            action='store',
+            help=const.MEDIA_ROOT_HELP
+        )
+
+        self.parser.add_argument(
+            '--static-root',
+            dest='static_root',
+            action='store',
+        )
+
+        self.parser.add_argument(
+            '--force',
+            dest='force',
+            action='store_true',
+            help='Overwrite the existing files'
+        )
+
+        self.parser.add_argument(
+            '--noinput',
+            dest='interactive',
+            action='store_false',
+            help='The installer will fail instead of asking for missing values.'
+        )
+
+    def __call__(self): # this is the main part of the original askbot_setup()
+        try:
+            # If necessary and if we are in the interactive mode,
+            # will ask for the missing parameters.
+            # Otherwise will use the default values.
+            console = Console()
+            validator = ParamsValidator(console, self.parser)
+            params = validator.get_params()
+            params['secret_key'] = generate_random_key(length=32)
+
+            for key, val in params.items():
+                print(f'{key}={val}')
+
+            # make the directories
+            force = params['force']
+            deployers.makedir(params['root_dir'], force)
+            deployers.makedir(params['proj_dir'], force)
+            deployers.makedir(os.path.join(params['proj_dir'], 'tmp'), force)
+            deployers.makedir(params['media_root_dir'], force)
+            deployers.makedir(params['static_root_dir'], force)
+            deployers.makedir(os.path.dirname(params['log_file_path']), force)
+
+            deployers.ManagePy(params).deploy()
+            deployers.UrlsPy(params).deploy()
+            deployers.SettingsPy(params).deploy()
+            deployers.CeleryPy(params).deploy()
+            deployers.InitPy(params).deploy()
+            # print next steps help
+            #console.print_postamble(params)
+
+        except ValidationError as error:
+            if error.messages and len(error.messages) == 1:
+                print(f'Error: {error.messages[0]}')
+                sys.exit(1)
+            print(f'\n\n{error}\nAborted')
+            sys.exit(1)
+        except DeploymentError as error:
+            print(f'\n\n{error}')
+            sys.exit(1)
+
+        except KeyboardInterrupt:
+            print("\n\nAborted.")
+            sys.exit(1)
+
+askbot_setup = AskbotSetup()

@@ -1,10 +1,10 @@
 """
 Q&A forum flatpages (about, etc.)
 """
-from django.utils.translation import ugettext_lazy as _
-from django.utils.translation import string_concat
+from django.utils.translation import gettext_lazy as _
+from django.utils.text import format_lazy
 from askbot.conf.settings_wrapper import settings
-from askbot.deps.livesettings import ConfigurationGroup, LongStringValue
+from livesettings.values import ConfigurationGroup, LongStringValue
 from askbot.conf.super_groups import CONTENT_AND_UI
 
 FLATPAGES = ConfigurationGroup(
@@ -23,6 +23,17 @@ settings.register(
         help_text=_('Save, then <a href="http://validator.w3.org/">'
                     'use HTML validator</a> on the "about" page to check '
                     'your input.')
+    )
+)
+
+settings.register(
+    LongStringValue(
+        FLATPAGES,
+        'AUTHENTICATION_PAGE_MESSAGE',
+        description=_('Message to display on the authentication pages'),
+        default='',
+        localized=True,
+        help_text=_('Markdown format is accepted')
     )
 )
 
@@ -57,6 +68,7 @@ settings.register(
         FLATPAGES,
         'QUESTION_INSTRUCTIONS',
         description=_('Instructions on how to ask questions'),
+        default='',
         localized=True,
         help_text=_('HTML is allowed. Save, then '
                     '<a href="http://validator.w3.org/">use HTML validator</a>'
@@ -70,6 +82,7 @@ settings.register(
         FLATPAGES,
         'FORUM_PRIVACY',
         description=_('Text of the Q&amp;A forum Privacy Policy (html format)'),
+        default='',
         localized=True,
         help_text=_('Save, then <a href="http://validator.w3.org/">'
                     'use HTML validator</a> on the "privacy" page to check '
@@ -82,20 +95,19 @@ settings.register(
         FLATPAGES,
         'TERMS',
         description=_('Terms and conditions'),
+        default='',
         localized=True,
-        help_text=string_concat(
+        help_text=format_lazy('{} {}',
             _('Save, then <a href="http://validator.w3.org/">'
               'use HTML validator</a> on the "terms" page to check '
               'your input.'),
-            ' ',
             settings.get_related_settings_info(
                 ('LOGIN_PROVIDERS', 'TERMS_ACCEPTANCE_REQUIRED', False))
         )
     )
 )
 
-# TODO: merge this with mandatory tags
-settings.register(  # this field is not editable manually
+settings.register( # this field is not editable manually
     LongStringValue(
         FLATPAGES,
         'CATEGORY_TREE',

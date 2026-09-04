@@ -1,9 +1,9 @@
 """Search state manager object"""
 import re
-import urllib
+import urllib.request, urllib.parse, urllib.error
 import copy
 
-from django.core import urlresolvers
+from django.urls import reverse
 from django.utils.http import urlencode
 from django.utils.encoding import smart_str
 
@@ -93,7 +93,7 @@ class SearchState(object):
         author=None, page=None, page_size=None, user_logged_in=False
     ):
         # INFO: zip(*[('a', 1), ('b', 2)])[0] == ('a', 'b')
-        if (scope not in zip(*const.POST_SCOPE_LIST)[0]) or (scope == 'followed' and not user_logged_in):
+        if (scope not in list(zip(*const.POST_SCOPE_LIST))[0]) or (scope == 'followed' and not user_logged_in):
             if user_logged_in:
                 self.scope = askbot_settings.DEFAULT_SCOPE_AUTHENTICATED
             else:
@@ -118,7 +118,7 @@ class SearchState(object):
             self.query_users = None
             self.query_title = None
 
-        if (sort not in zip(*const.POST_SORT_METHODS)[0]) or (sort == 'relevance-desc' and (not self.query or not askbot.conf.should_show_sort_by_relevance())):
+        if (sort not in list(zip(*const.POST_SORT_METHODS))[0]) or (sort == 'relevance-desc' and (not self.query or not askbot.conf.should_show_sort_by_relevance())):
             self.sort = const.DEFAULT_POST_SORT_METHOD
         else:
             self.sort = sort
@@ -133,16 +133,22 @@ class SearchState(object):
                 tag = t.strip()
                 if tag not in self.tags:
                     self.tags.append(tag)
+            # Canonicalize tag order. Without this, every permutation of the
+            # same tag set produces a distinct URL serving identical results,
+            # which is wasteful (cache fragmentation, duplicate SEO content) and
+            # is exploited by scrapers to bypass per-URL caching by enumerating
+            # the N! orderings of a single tag set.
+            self.tags.sort()
 
         self.author = int(author) if author else None
         self.page = int(page) if page else 1
-        if self.page == 0:  # in case someone likes jokes :)
+        if self.page <= 0:  # in case someone likes jokes :)
             self.page = 1
 
         default_page_size = int(askbot_settings.DEFAULT_QUESTIONS_PAGE_SIZE)
         self.page_size = int(page_size) if page_size else default_page_size
 
-        self._questions_url = urlresolvers.reverse('questions')
+        self._questions_url = reverse('questions')
 
     def __str__(self):
         return self.query_string()
@@ -158,7 +164,7 @@ class SearchState(object):
         return '?' + urlencode({'title': ask_title})
 
     def full_ask_url(self):
-        return urlresolvers.reverse('ask') + self.ask_query_string()
+        return reverse('ask') + self.ask_query_string()
 
     def unified_tags(self):
         "Returns tags both from tag selector and extracted from query"
@@ -201,13 +207,13 @@ class SearchState(object):
 
         #order of items is important!!!
         if self.tags:
-            lst.append('tags:' + urllib.quote(smart_str(const.TAG_SEP.join(self.tags)), safe=self.SAFE_CHARS))
+            lst.append('tags:' + urllib.parse.quote(smart_str(const.TAG_SEP.join(self.tags)), safe=self.SAFE_CHARS))
         if self.author:
             lst.append('author:' + str(self.author))
         if self.page:
             lst.append('page:' + str(self.page))
         if self.query:
-            lst.append('query:' + urllib.quote(smart_str(self.query), safe=self.SAFE_CHARS))
+            lst.append('query:' + urllib.parse.quote(smart_str(self.query), safe=self.SAFE_CHARS))
         return '/'.join(lst) + '/'
 
     def deepcopy(self): # TODO: test me

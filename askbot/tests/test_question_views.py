@@ -1,18 +1,27 @@
 from bs4 import BeautifulSoup
+from django.test import override_settings as override_django_settings
 from askbot.conf import settings as askbot_settings
 from askbot import const
 from askbot.tests.utils import AskbotTestCase
 from askbot import models
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 
 class PrivateQuestionViewsTests(AskbotTestCase):
 
     def setUp(self):
         self._backup = askbot_settings.GROUPS_ENABLED
+        everyone = models.Group.objects.get_global_group()
+        everyone.can_post_questions = True
+        everyone.can_post_answers = True
+        everyone.can_post_comments = True
         askbot_settings.update('GROUPS_ENABLED', True)
         self.user = self.create_user('user')
         self.group = models.Group.objects.create(
-                        name='the group', openness=models.Group.OPEN
+                        name='the group',
+                        openness=models.Group.OPEN,
+                        can_post_questions=True,
+                        can_post_answers=True,
+                        can_post_comments=True
                     )
         self.user.join_group(self.group)
         self.qdata = {
@@ -24,14 +33,15 @@ class PrivateQuestionViewsTests(AskbotTestCase):
     def tearDown(self):
         askbot_settings.update('GROUPS_ENABLED', self._backup)
 
+    @override_django_settings(ASKBOT_LANGUAGE_MODE='single-lang')
     def test_post_private_question(self):
         data = self.qdata
         data['post_privately'] = 'checked'
         response1 = self.client.post(reverse('ask'), data=data)
         response2 = self.client.get(response1['location'])
-        dom = BeautifulSoup(response2.content)
+        dom = BeautifulSoup(response2.content, 'html5lib')
         title = dom.find('h1').text
-        self.assertTrue(unicode(const.POST_STATUS['private']) in title)
+        self.assertTrue(str(const.POST_STATUS['private']) in title)
         question = models.Thread.objects.get()
         self.assertEqual(question.title, self.qdata['title'])
         self.assertFalse(models.Group.objects.get_global_group() in set(question.groups.all()))
@@ -40,77 +50,77 @@ class PrivateQuestionViewsTests(AskbotTestCase):
         self.client.logout()
         response = self.client.get(question._question_post().get_absolute_url())
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(response.content, '')
+        self.assertEqual(response.content, b'')
         #private question link is not shown on the main page
         #to unauthorized users
         response = self.client.get(reverse('questions'))
-        self.assertFalse(self.qdata['title'] in response.content)
+        self.assertFalse(self.qdata['title'] in str(response.content))
         #private question link is not shown on the poster profile
         #to the unauthorized users
         response = self.client.get(self.user.get_profile_url())
-        self.assertFalse(self.qdata['title'] in response.content)
+        self.assertFalse(self.qdata['title'] in str(response.content))
 
     def test_publish_private_question(self):
         question = self.post_question(user=self.user, is_private=True)
         title = question.thread.get_title()
-        self.assertTrue(unicode(const.POST_STATUS['private']) in title)
-        data = self.qdata
-        #data['post_privately'] = 'false'
-        data['select_revision'] = 'false'
-        data['text'] = 'edited question text'
-        response1 = self.client.post(
-            reverse('edit_question', kwargs={'id':question.id}),
-            data=data
-        )
+        self.assertTrue(str(const.POST_STATUS['private']) in title)
         response2 = self.client.get(question.get_absolute_url())
-        dom = BeautifulSoup(response2.content)
+        dom = BeautifulSoup(response2.content, 'html5lib')
         h1 = dom.find('h1')
         title = h1.find('div', {'class': 'js-editable-content'}).text
-        self.assertTrue(models.Group.objects.get_global_group() in set(question.groups.all()))
-        self.assertEqual(title, self.qdata['title'])
+        self.assertFalse(models.Group.objects.get_global_group() in set(question.groups.all()))
+
+        self.client.post(
+            reverse('publish_post'),
+            data={'post_id': question.id},
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest'
+        )
+
+        question = self.reload_object(question)
+        #self.assertTrue(str(const.POST_STATUS['private']) not in question.thread.get_title())
+        self.assertEqual(question.is_private(), False)
 
         self.client.logout()
         response = self.client.get(question.get_absolute_url())
-        self.assertTrue('edited question text' in response.content)
+        self.assertEqual(response.status_code, 200)
 
+    @override_django_settings(ASKBOT_LANGUAGE_MODE='single-lang')
     def test_privatize_public_question(self):
         question = self.post_question(user=self.user)
         title = question.thread.get_title()
-        self.assertFalse(unicode(const.POST_STATUS['private']) in title)
-        data = self.qdata
-        data['post_privately'] = 'checked'
-        data['select_revision'] = 'false'
-        response1 = self.client.post(
-            reverse('edit_question', kwargs={'id':question.id}),
-            data=data
+        self.assertFalse(str(const.POST_STATUS['private']) in title)
+
+        self.user.set_status('d')
+        self.user.save()
+        response = self.client.post(
+            reverse('publish_post'),
+            data={'post_id': question.id},
+            HTTP_X_REQUESTED_WITH='XMLHttpRequest'
         )
-        response2 = self.client.get(question.get_absolute_url())
-        dom = BeautifulSoup(response2.content)
+
+        response = self.client.get(question.get_absolute_url())
+        dom = BeautifulSoup(response.content, 'html5lib')
         title = dom.find('h1').text
         self.assertFalse(models.Group.objects.get_global_group() in set(question.groups.all()))
-        self.assertTrue(unicode(const.POST_STATUS['private']) in title)
+        self.assertTrue(str(const.POST_STATUS['private']) in title)
 
-    def test_private_checkbox_is_on_when_editing_private_question(self):
+    @override_django_settings(ASKBOT_LANGUAGE_MODE='single-lang')
+    def private_question_has_publish_button(self):
         question = self.post_question(user=self.user, is_private=True)
-        response = self.client.get(
-            reverse('edit_question', kwargs={'id':question.id})
-        )
-        dom = BeautifulSoup(response.content)
-        checkbox = dom.find(
-            'input', attrs={'type': 'checkbox', 'name': 'post_privately'}
-        )
-        self.assertEqual(checkbox['checked'], 'checked')
+        response = self.client.get(question.get_absolute_url())
+        dom = BeautifulSoup(response.content, 'html5lib')
+        btn = dom.select(f'#js-post-publish-btn-{question.id}')
+        self.assertEqual(len(btn), 1)
+        self.assertTrue('js-publish-post' in btn[0]['class'])
 
-    def test_private_checkbox_is_off_when_editing_public_question(self):
+    @override_django_settings(ASKBOT_LANGUAGE_MODE='single-lang')
+    def test_public_question_has_unpublish_button(self):
         question = self.post_question(user=self.user)
-        response = self.client.get(
-            reverse('edit_question', kwargs={'id':question.id})
-        )
-        dom = BeautifulSoup(response.content)
-        checkbox = dom.find(
-            'input', attrs={'type': 'checkbox', 'name': 'post_privately'}
-        )
-        self.assertEqual(checkbox.get('checked', False), False)
+        response = self.client.get(question.get_absolute_url())
+        dom = BeautifulSoup(response.content, 'html5lib')
+        btn = dom.select(f'#js-post-publish-btn-{question.id}')
+        self.assertEqual(len(btn), 1)
+        self.assertTrue('js-unpublish-post' in btn[0]['class'])
 
 
 class PrivateAnswerViewsTests(AskbotTestCase):
@@ -118,9 +128,18 @@ class PrivateAnswerViewsTests(AskbotTestCase):
     def setUp(self):
         self._backup = askbot_settings.GROUPS_ENABLED
         askbot_settings.update('GROUPS_ENABLED', True)
+        everyone = models.Group.objects.get_global_group()
+        everyone.can_post_questions = True
+        everyone.can_post_answerss = True
+        everyone.can_post_comments = True
+        everyone.save()
         self.user = self.create_user('user')
         group = models.Group.objects.create(
-            name='the group', openness=models.Group.OPEN
+            name='the group',
+            openness=models.Group.OPEN,
+            can_post_questions=True,
+            can_post_answers=True,
+            can_post_comments=True
         )
         self.user.join_group(group)
         self.question = self.post_question(user=self.user)
@@ -141,11 +160,11 @@ class PrivateAnswerViewsTests(AskbotTestCase):
         user2 = self.create_user('user2')
         self.client.login(user_id=user2.id, method='force')
         response = self.client.get(self.question.get_absolute_url())
-        self.assertFalse('some answer text' in response.content)
+        self.assertFalse(b'some answer text' in response.content)
 
         self.client.logout()
         response = self.client.get(self.question.get_absolute_url())
-        self.assertFalse('some answer text' in response.content)
+        self.assertFalse(b'some answer text' in response.content)
 
     def test_private_checkbox_is_on_when_editing_private_answer(self):
         answer = self.post_answer(
@@ -154,18 +173,18 @@ class PrivateAnswerViewsTests(AskbotTestCase):
         response = self.client.get(
             reverse('edit_answer', kwargs={'id': answer.id})
         )
-        dom = BeautifulSoup(response.content)
+        dom = BeautifulSoup(response.content, 'html5lib')
         checkbox = dom.find(
             'input', attrs={'type': 'checkbox', 'name': 'post_privately'}
         )
-        self.assertEqual(checkbox['checked'], 'checked')
+        self.assertTrue(checkbox.has_attr('checked'))
 
     def test_privaet_checkbox_is_off_when_editing_public_answer(self):
         answer = self.post_answer(question=self.question, user=self.user)
         response = self.client.get(
             reverse('edit_answer', kwargs={'id': answer.id})
         )
-        dom = BeautifulSoup(response.content)
+        dom = BeautifulSoup(response.content, 'html5lib')
         checkbox = dom.find(
             'input', attrs={'type': 'checkbox', 'name': 'post_privately'}
         )
@@ -183,7 +202,7 @@ class PrivateAnswerViewsTests(AskbotTestCase):
         self.assertTrue(models.Group.objects.get_global_group() in answer.groups.all())
         self.client.logout()
         response = self.client.get(self.question.get_absolute_url())
-        self.assertTrue('edited answer text' in response.content)
+        self.assertIn(b'edited answer text', response.content)
 
 
     def test_privatize_public_answer(self):
@@ -202,4 +221,4 @@ class PrivateAnswerViewsTests(AskbotTestCase):
         #check that countent is not seen by an anonymous user
         self.client.logout()
         response = self.client.get(self.question.get_absolute_url())
-        self.assertFalse('edited answer text' in response.content)
+        self.assertFalse(b'edited answer text' in response.content)

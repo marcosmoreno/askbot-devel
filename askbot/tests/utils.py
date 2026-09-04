@@ -1,12 +1,20 @@
 """utility functions used by Askbot test cases
 """
 from functools import wraps
-from markdown2 import Markdown
+import django
+from django.apps import apps
+from django.contrib.auth.management import create_permissions
+from django.contrib.sites.management import create_default_site
+try:
+    from django.contrib.contenttypes.management import create_contenttypes
+except ImportError: # downwards compatible, Django <1.11
+    from django.contrib.contenttypes.management import update_contenttypes as create_contenttypes
 from django.core.cache import cache
+from django.db.models.signals import post_migrate
 from django.test import TestCase
 from askbot import models
 from askbot import signals
-
+from django.test import signals as django_test_signals
 
 def with_settings(**settings_dict):
     """a decorator that will run function with settings
@@ -22,7 +30,7 @@ def with_settings(**settings_dict):
         def wrapped(*args, **kwargs):
             from askbot.conf import settings as askbot_settings
             backup_settings_dict = dict()
-            for key, value in settings_dict.items():
+            for key, value in list(settings_dict.items()):
                 backup_settings_dict[key] = getattr(askbot_settings, key)
                 askbot_settings.update(key, value)
 
@@ -31,7 +39,7 @@ def with_settings(**settings_dict):
             except:
                 raise
             finally:
-                for key, value in backup_settings_dict.items():
+                for key, value in list(backup_settings_dict.items()):
                     askbot_settings.update(key, value)
 
         return wrapped
@@ -39,15 +47,39 @@ def with_settings(**settings_dict):
     return decorator
 
 
+class livesettings_override:
+    """``with``-form companion to ``with_settings``.
 
-def create_user(
-            username = None,
-            email = None,
-            notification_schedule = None,
-            date_joined = None,
-            status = 'a',
-            reputation = 1
-        ):
+    ``with_settings`` above is decorator-only; some tests need a
+    context-manager form so livesettings overrides can nest inside
+    django ``override_settings`` blocks. Backs up and restores the
+    original livesetting values on exit.
+    """
+
+    def __init__(self, **kwargs):
+        self._desired = kwargs
+        self._backup = {}
+
+    def __enter__(self):
+        from askbot.conf import settings as askbot_settings
+        for key, value in self._desired.items():
+            self._backup[key] = getattr(askbot_settings, key)
+            askbot_settings.update(key, value)
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        from askbot.conf import settings as askbot_settings
+        for key, value in self._backup.items():
+            askbot_settings.update(key, value)
+        return False
+
+
+def create_user(username=None,
+                email=None,
+                notification_schedule=None,
+                date_joined=None,
+                status=None,
+                reputation=1):
     """Creates a user and sets default update subscription
     settings
 
@@ -82,7 +114,7 @@ def create_user(
     #because just below we will be replacing them with the new values
     user.notification_subscriptions.all().delete()
 
-    for feed_type, frequency in notification_schedule.items():
+    for feed_type, frequency in list(notification_schedule.items()):
         feed = models.EmailFeedSetting(
                         feed_type = feed_type,
                         frequency = frequency,
@@ -91,7 +123,8 @@ def create_user(
         feed.save()
 
     signals.user_registered.send(None, user=user)
-    user.set_status(status)
+    if status:
+        user.set_status(status)
 
     return user
 
@@ -100,6 +133,34 @@ class AskbotTestCase(TestCase):
     """adds some askbot-specific methods
     to django TestCase class
     """
+
+    if django.VERSION >= (5, 0):
+        @classmethod
+        def _fixture_setup(cls):
+            super()._fixture_setup()
+            for app_config in apps.get_app_configs():
+                create_contenttypes(app_config)
+                create_permissions(app_config)
+                create_default_site(app_config)
+    else:
+        def _fixture_setup(self):
+            super(AskbotTestCase, self)._fixture_setup()
+            for app_config in apps.get_app_configs():
+                create_contenttypes(app_config)
+                create_permissions(app_config)
+                create_default_site(app_config)
+
+    def _fixture_teardown(self):
+        post_migrate.disconnect(create_default_site, sender=apps.get_app_config('sites'))
+        post_migrate.disconnect(create_contenttypes)
+        post_migrate.disconnect(create_permissions, dispatch_uid="django.contrib.auth.management.create_permissions")
+
+        super(AskbotTestCase, self)._fixture_teardown()
+
+        post_migrate.connect(create_contenttypes)
+        post_migrate.connect(create_permissions, dispatch_uid="django.contrib.auth.management.create_permissions")
+        post_migrate.connect(create_default_site, sender=apps.get_app_config('sites'))
+
 
     @classmethod
     def setUpClass(cls):
@@ -113,7 +174,7 @@ class AskbotTestCase(TestCase):
                 notification_schedule=None,
                 date_joined=None,
                 reputation=1,
-                status='a'
+                status=None
             ):
         """creates user with username, etc and
         makes the result accessible as
@@ -144,7 +205,7 @@ class AskbotTestCase(TestCase):
         """a shim for python < 2.7"""
         try:
             #run assertRaisesRegex, if available
-            super(AskbotTestCase, self).assertRaisesRegexp(*args, **kwargs)
+            super(AskbotTestCase, self).assertRaisesRegex(*args, **kwargs)
         except AttributeError:
             #in this case lose testing for the error text
             #second argument is the regex that is supposed
@@ -152,14 +213,6 @@ class AskbotTestCase(TestCase):
             args_list = list(args)#conv tuple to list
             args_list.pop(1)#so we can remove an item
             self.assertRaises(*args_list, **kwargs)
-
-    def assertQuerysetEqual(self, qs1, qs2, transform=repr, ordered=True):
-        '''borrowed from django1.4 and modified a bit'''
-        items = map(transform, qs1)
-        values = map(transform, qs2)
-        if not ordered:
-            return self.assertEqual(set(items), set(values))
-        return self.assertEqual(list(items), list(values))
 
     def post_question(
                     self,
@@ -298,9 +351,7 @@ class AskbotTestCase(TestCase):
         return tag
 
     def create_group(self, group_name=None, openness=models.Group.OPEN):
-        return models.Group.objects.get_or_create(
-                    name='private', openness=openness
-                )
+        return models.Group.objects.get_or_create(name='private', openness=openness)[0]
 
     def post_comment(
                 self,
@@ -368,3 +419,19 @@ def skipIf(condition, reason):
     if condition:
         return skip(reason)
     return _id
+
+
+def patch_jinja2():
+    from jinja2 import Template
+    ORIG_JINJA2_RENDERER = Template.render
+
+    def instrumented_render(template_object, *args, **kwargs):
+        context = dict(*args, **kwargs)
+        django_test_signals.template_rendered.send(
+                                sender=template_object,
+                                template=template_object,
+                                context=context
+                            )
+        return ORIG_JINJA2_RENDERER(template_object, *args, **kwargs)
+    Template.render = instrumented_render
+

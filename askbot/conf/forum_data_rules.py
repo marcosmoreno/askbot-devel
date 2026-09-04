@@ -1,11 +1,13 @@
 """
 Settings for askbot data display and entry
 """
-from django.utils.translation import ugettext_lazy as _
+from django.core.cache import cache
+from django.utils.translation import gettext_lazy as _
 from askbot.conf.settings_wrapper import settings
-from askbot.deps import livesettings
+from livesettings import values as livesettings
 from askbot import const
 from askbot.conf.super_groups import DATA_AND_FORMATTING
+from askbot.utils import category_tree
 
 FORUM_DATA_RULES = livesettings.ConfigurationGroup(
     'FORUM_DATA_RULES',
@@ -13,10 +15,7 @@ FORUM_DATA_RULES = livesettings.ConfigurationGroup(
     super_group=DATA_AND_FORMATTING
 )
 
-EDITOR_CHOICES = (
-    ('markdown', _('Markdown')),
-    ('tinymce', _('WYSIWYG (tinymce)')),
-)
+EDITOR_CHOICES = (('markdown', _('Markdown')),)
 
 settings.register(
     livesettings.StringValue(
@@ -57,17 +56,23 @@ settings.register(
     )
 )
 
-# settings.register(
-#     livesettings.BooleanValue(
-#         FORUM_DATA_RULES,
-#         'ENABLE_VIDEO_EMBEDDING',
-#         default=False,
-#         description=_('Enable embedding videos.'),
-#         help_text=_(
-#             '<em>Note: please read <a href="%(url)s">read this</a> first.</em>'
-#         ) % {'url': const.DEPENDENCY_URLS['embedding-video']}
-#     )
-# )
+settings.register(
+    livesettings.BooleanValue(
+        FORUM_DATA_RULES,
+        'ENABLE_VIDEO_EMBEDDING',
+        default=False,
+        description=_('Enable embedding videos.'),
+    )
+)
+
+settings.register(
+    livesettings.BooleanValue(
+        FORUM_DATA_RULES,
+        'QUESTION_SUMMARY_SHOW_ZERO_COUNTS',
+        default=True,
+        description=_('Show zero (votes, answers, view) counts in the question lists')
+    )
+)
 
 settings.register(
     livesettings.BooleanValue(
@@ -115,6 +120,34 @@ settings.register(
             'user login system to check for pending posts '
             'every time the user logs in. The builtin Askbot login system '
             'supports this feature.'
+        )
+    )
+)
+
+settings.register(
+    livesettings.BooleanValue(
+        FORUM_DATA_RULES,
+        'ATTACHMENT_UPLOADS_ENABLED',
+        default=True,
+        description=_('Allow uploading file attachmentts in posts'),
+        help_text=_(
+            'File uploads are subject to a minimum reputation setting. '
+            'Also, if groups are enabled - user must belong to at least '
+            'one group that is allowed to upload files.'
+        )
+    )
+)
+
+settings.register(
+    livesettings.BooleanValue(
+        FORUM_DATA_RULES,
+        'IMAGE_UPLOADS_ENABLED',
+        default=True,
+        description=_('Allow uploading images in posts'),
+        help_text=_(
+            'File uploads are subject to a minimum reputation setting. '
+            'Also, if groups are enabled - user must belong to at least '
+            'one group that is allowed to upload files.'
         )
     )
 )
@@ -297,6 +330,41 @@ settings.register(
     )
 )
 
+def update_admin_tags_in_category_tree(_, new_value):
+    if new_value == True:
+        try:
+            tree = category_tree.get_data()
+            cat = tree[0][1][0][0] # find the first category in the tree
+            if cat != const.ADMIN_TAGS_CATEGORY_ROOT:
+                category_tree.add_category(tree, const.ADMIN_TAGS_CATEGORY_ROOT, [0])
+                category_tree.save_data(tree)
+                cache.clear()
+        except Exception as e:
+            pass
+    return new_value
+
+settings.register(
+    livesettings.BooleanValue(
+        FORUM_DATA_RULES,
+        'ADMIN_TAGS_ENABLED',
+        default=False,
+        description=_('Enable admin tags'),
+        update_callback=update_admin_tags_in_category_tree,
+    )
+)
+
+settings.register(
+    livesettings.LongStringValue(
+        FORUM_DATA_RULES,
+        'ADMIN_TAGS',
+        description=_('Admin tags'),
+        default='',
+        help_text=_(
+            'Admin tags can be added or removed only by the site administrators or moderators.'
+        )
+    )
+)
+
 settings.register(
     livesettings.BooleanValue(
         FORUM_DATA_RULES,
@@ -306,7 +374,7 @@ settings.register(
         help_text=_(
             'Attention: after checking this, please back up the database, '
             'and run a management command: '
-            '<code>python manage.py fix_question_tags</code> to globally '
+            '<code>python manage.py askbot_fix_tags</code> to globally '
             'rename the tags'
          )
     )
@@ -409,15 +477,6 @@ settings.register(
 )
 
 settings.register(
-    livesettings.BooleanValue(
-        FORUM_DATA_RULES,
-        'COMMENTS_REVERSED',
-        default=False,
-        description=_('Reverse ordering of comments')
-    )
-)
-
-settings.register(
     livesettings.IntegerValue(
         FORUM_DATA_RULES,
         'MIN_WORDS_TO_WRAP_COMMENTS',
@@ -472,10 +531,7 @@ settings.register(
         'SAVE_COMMENT_ON_ENTER',
         default=False,
         description=_('Save comment by pressing &lt;Enter&gt; key'),
-        help_text=_(
-            'This may be useful when only one-line comments '
-            'are desired. Will not work with TinyMCE editor.'
-        )
+        help_text=_('This may be useful when only one-line comments are desired.')
     )
 )
 

@@ -8,21 +8,24 @@ from django.utils.encoding import force_str
 from django.utils import translation
 
 HAS_ASKBOT_LOCALE_MIDDLEWARE = 'askbot.middleware.locale.LocaleMiddleware' in \
-                                   django_settings.MIDDLEWARE_CLASSES
+                                   django_settings.MIDDLEWARE
 
 def get_language():
     if askbot.is_multilingual():
-        return translation.get_language()
-    elif HAS_ASKBOT_LOCALE_MIDDLEWARE:
+        lang = translation.get_language()
+        if lang:
+            return lang
+
+    if HAS_ASKBOT_LOCALE_MIDDLEWARE:
         return askbot_settings.ASKBOT_LANGUAGE
-    else:
-        return django_settings.LANGUAGE_CODE
+
+    return django_settings.LANGUAGE_CODE
 
 LANGUAGES_DICT = dict(django_settings.LANGUAGES)
 
 def get_language_codes():
     """returns list of activated language codes"""
-    return LANGUAGES_DICT.keys()
+    return list(LANGUAGES_DICT.keys())
 
 def get_language_name(lang=None):
     lang = lang or get_language()

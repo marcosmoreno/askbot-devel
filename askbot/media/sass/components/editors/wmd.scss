@@ -1,0 +1,66 @@
+.wmd-container {
+  margin: var(--wmd-margin);
+  overflow: hidden;
+  width: 100%;
+}
+
+.wmd-input { 
+	height: 500px;
+	background-color: Gainsboro;
+	border: 1px solid DarkGray;
+	margin-top: -20px;
+}
+
+.wmd-output { 
+	background-color: Pink;
+}
+
+.wmd-button-row {
+	position: relative; 
+  display: flex;
+  align-items: center;
+  margin: var(--wmd-button-row-margin) !important;
+	padding: var(--wmd-button-row-padding) !important;
+}
+
+.wmd-spacer {
+	width: var(--wmd-spacer-width);
+	height: var(--wmd-spacer-height);
+  margin: var(--wmd-spacer-margin);
+	background: var(--wmd-spacer-background);
+	display: inline-block; 
+	list-style: none;
+}
+
+.wmd-button {
+  cursor: pointer;
+	width: var(--wmd-button-size);
+	height: var(--wmd-button-size);
+  margin: var(--wmd-button-margin);
+	display: inline-block; 
+	list-style: none;
+}
+
+.wmd-button::before {
+  align-items: center;
+  color: var(--wmd-button-color);
+  background: var(--wmd-button-bg);
+  display: flex !important;
+  justify-content: center;
+  height: 100%;
+  width: 100%;
+  transition: color var(--transition-params), background var(--transition-params);
+}
+
+.wmd-button:hover::before {
+  transition: color var(--transition-params), background var(--transition-params);
+  color: var(--wmd-button-hover-color);
+  background: var(--wmd-button-hover-bg);
+}
+
+
+.wmd-previewer-toggle {
+  cursor: pointer;
+  padding: var(--wmd-preview-toggle-padding);
+  margin: var(--wmd-preview-toggle-margin);
+}

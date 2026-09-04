@@ -1,10 +1,12 @@
 from django.core.management.base import CommandError, BaseCommand
 from django.db import transaction
-from askbot.deployment import package_utils
-from askbot.models import (User, LocalizedUserProfile, Post,
-                           GroupMembership
-                          )
-from askbot.deps.group_messaging.models import get_unread_inbox_counter
+from askbot.models import (
+    GroupMembership,
+    LocalizedUserProfile,
+    Post,
+    User,
+    UserProfile
+)
 from askbot import const
 
 # TODO: this command is broken - doesn't take into account UNIQUE constraints
@@ -17,29 +19,43 @@ from askbot import const
 
 def print_post_info():
     for p in Post.objects.all():
-        print p.author,
-    print ''
+        print(p.author, end=' ')
+    print('')
 
 class MergeUsersBaseCommand(BaseCommand):
     args = '<from_user_id> <to_user_id>'
     help = 'Merge an account and all information from a <user_id> to a <user_id>, deleting the <from_user>'
 
+    def add_arguments(self, parser):
+        parser.add_argument('from_user_id', type=int, nargs=1)
+        parser.add_argument('to_user_id', type=int, nargs=1)
+
     def handle(self, *arguments, **options):
-        self.parse_arguments(*arguments)
+        self.parse_arguments(options['from_user_id'][0], options['to_user_id'][0])
         self.prepare()
 
-        rel_objs = User._meta.get_all_related_objects()
+        #rel_objs = User._meta.get_all_related_objects()
+        # according to https://docs.djangoproject.com/en/1.10/ref/models/meta/ this becomes:
+        rel_objs = [
+            f for f in User._meta.get_fields()
+            if (f.one_to_many or f.one_to_one)
+            and f.auto_created and not f.concrete
+        ]
         for rel in rel_objs:
             self.process_relation(rel)
 
-        rel_m2ms = User._meta.get_all_related_many_to_many_objects()
+        #rel_m2ms = User._meta.get_all_related_many_to_many_objects()
+        rel_m2ms = [
+            f for f in User._meta.get_fields(include_hidden=True)
+            if f.many_to_many and f.auto_created
+        ]
         for rel in rel_m2ms:
             self.process_m2m(rel)
 
         self.cleanup()
 
     def cleanup(self):
-        raise Exception, 'Not implemented'
+        raise Exception('Not implemented')
 
     def prepare(self):
         pass
@@ -47,20 +63,20 @@ class MergeUsersBaseCommand(BaseCommand):
     def parse_arguments(self, *arguments):
         if len(arguments) != 2:
             raise CommandError('Arguments are <from_user_id> to <to_user_id>')
-        self.from_user = User.objects.get(id = arguments[0])
-        self.to_user = User.objects.get(id = arguments[1])
+        self.from_user = User.objects.get(id=arguments[0])
+        self.to_user = User.objects.get(id=arguments[1])
 
     def process_relation(self, rel):
         try:
             self.process_field(rel.related_model, rel.field.name)
-        except Exception, error:
-            self.stdout.write((u'Warning: %s\n' % error).encode('utf-8'))
+        except Exception as error:
+            self.stdout.write(('Warning: %s\n' % error).encode('utf-8'))
 
     def process_m2m(self, rel):
         try:
             self.process_m2m_field(rel.related_model, rel.field.name)
-        except Exception, error:
-            self.stdout.write((u'Warning: %s\n' % error).encode('utf-8'))
+        except Exception as error:
+            self.stdout.write(('Warning: %s\n' % error).encode('utf-8'))
 
     def process_field(self, model, field_name):
         """reassigns the related object to the new user"""
@@ -83,7 +99,7 @@ class MergeUsersBaseCommand(BaseCommand):
 class Command(MergeUsersBaseCommand):
 
     def prepare(self):
-
+        """Takes care of things that cannot be done automatically"""
         #copy group memberships
         memberships = GroupMembership.objects.filter(user=self.from_user)
         for from_gm in memberships:
@@ -96,12 +112,19 @@ class Command(MergeUsersBaseCommand):
                 from_gm.user = self.to_user
                 from_gm.save()
 
-        #add inbox counters and delete dupes
-        from_ctr = get_unread_inbox_counter(self.from_user)
-        to_ctr = get_unread_inbox_counter(self.to_user)
-        to_ctr.count += from_ctr.count
-        to_ctr.save()
-        from_ctr.delete()
+        #move followers
+        for follower in self.from_user.get_followers():
+            follower.unfollow_user(self.from_user)
+            if follower.pk != self.to_user.pk:
+                if not follower.is_following(self.to_user):
+                    follower.follow_user(self.to_user)
+
+        #move followed users
+        for followed in self.from_user.get_followed_users():
+            self.from_user.unfollow_user(followed)
+            if followed.pk != self.to_user.pk:
+                if not self.to_user.is_following(followed):
+                    self.to_user.follow_user(followed)
 
         #delete subscriptions (todo: merge properly)
         self.from_user.notification_subscriptions.all().delete()
@@ -113,23 +136,27 @@ class Command(MergeUsersBaseCommand):
         #delete dupes of localized profiles
         localized_profiles.delete()
 
-        #merge badges
-        from_profile = self.from_user.askbot_profile
-        self.to_user.gold += from_profile.gold
-        self.to_user.silver += from_profile.silver
-        self.to_user.bronze += from_profile.bronze
+        #merge items stored in the user.askbot_profile
+        try:
+            from_profile = self.from_user.askbot_profile
+        except UserProfile.DoesNotExist:
+            pass
+        else:
+            self.to_user.gold += from_profile.gold
+            self.to_user.silver += from_profile.silver
+            self.to_user.bronze += from_profile.bronze
 
-        #merge last seen dates
-        if from_profile.last_seen > self.to_user.last_seen:
-            self.to_user.last_seen = from_profile.last_seen
+            #merge last seen dates
+            if from_profile.last_seen > self.to_user.last_seen:
+                self.to_user.last_seen = from_profile.last_seen
 
-        #merge date joined dates
-        if self.from_user.date_joined < self.to_user.date_joined:
-            self.to_user.date_joined = self.from_user.date_joined
+            #merge date joined dates
+            if self.from_user.date_joined < self.to_user.date_joined:
+                self.to_user.date_joined = self.from_user.date_joined
 
-        self.to_user.askbot_profile.save()
-        self.to_user.save()
-        from_profile.delete()
+            self.to_user.askbot_profile.save()
+            self.to_user.save()
+            from_profile.delete()
 
     def cleanup(self):
         self.to_user.save()

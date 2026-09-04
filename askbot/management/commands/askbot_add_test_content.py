@@ -1,8 +1,9 @@
+
 import sys
 from askbot.conf import settings as askbot_settings
 from askbot.models import User
 from askbot.utils.console import choice_dialog
-from django.core.management.base import NoArgsCommand
+from django.core.management import BaseCommand
 from django.conf import settings as django_settings
 from django.utils import translation
 from askbot.utils.translation import get_language
@@ -49,7 +50,7 @@ ALERT_SETTINGS_KEYS = (
     'DEFAULT_NOTIFICATION_DELIVERY_SCHEDULE_M_AND_C',
 )
 
-class Command(NoArgsCommand):
+class Command(BaseCommand):
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -62,9 +63,9 @@ class Command(NoArgsCommand):
         )
 
     def bad_stuff(self):
-        if self.options['nospam']:
-            return ''
-        return "<script>alert('hohoho')</script>"
+        if self.options['with_spam']:
+            return "<script>alert('hohoho')</script>"
+        return ''
 
     def backup_settings(self):
         settings = {}
@@ -88,7 +89,7 @@ class Command(NoArgsCommand):
     def print_if_verbose(self, text):
         "Only print if user chooses verbose output"
         if self.verbosity > 0:
-            print text
+            print(text)
 
     def create_users(self):
         "Create the users and return an array of created users"
@@ -251,7 +252,7 @@ class Command(NoArgsCommand):
         return active_question_comment, active_answer_comment
 
 
-    def handle_noargs(self, **options):
+    def handle(self, **options):
         self.options = options
         self.verbosity = int(options.get("verbosity", 1))
         self.interactive = options.get("interactive")

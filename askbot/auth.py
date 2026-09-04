@@ -9,10 +9,20 @@ User.assert_can...
 """
 from django.db import transaction
 from django.utils import timezone
+from django.contrib.auth import logout as _logout
 from askbot.models import Repute
 # from askbot.models import Answer
 from askbot import signals
 from askbot.conf import settings as askbot_settings
+from askbot.middleware.anon_user import connect_messages_to_anon_user
+
+
+#todo: uncouple this from askbot
+def logout(request):
+    """Logs out the user and still allows
+    to send messages to that user vi request.user.message_set api"""
+    _logout(request)
+    connect_messages_to_anon_user(request)
 
 
 ###########################################
@@ -33,7 +43,7 @@ def onFlaggedItem(post, user, timestamp=None):
         post.language_code)
     flagged_user.save()
 
-    question = post.thread._question_post()
+    question = post.thread._question_post() #pylint: disable=protected-access
 
     reputation = Repute(
         user=flagged_user,
@@ -101,17 +111,22 @@ def onUnFlaggedItem(post, user, timestamp=None):
     if timestamp is None:
         timestamp = timezone.now()
 
+    # delete the activity record
+    flag_activity = post.get_flag_activity_object(user)
+    flag_activity.delete()
+
+    # update denormalized data
     post.offensive_flag_count = post.offensive_flag_count - 1
     post.save()
 
+    # undo rep loss to the flagged user
     flagged_user = post.author
-
     flagged_user.receive_reputation(
         -askbot_settings.REP_LOSS_FOR_RECEIVING_FLAG,  # negative of a negative
         post.language_code)
     flagged_user.save()
 
-    question = post.thread._question_post()
+    question = post.thread._question_post() #pylint: disable=protected-access
 
     reputation = Repute(
         user=flagged_user,
@@ -121,9 +136,6 @@ def onUnFlaggedItem(post, user, timestamp=None):
         reputation_type=-4,  # TODO: clean up magic number
         reputation=flagged_user.reputation)
     reputation.save()
-
-    signals.remove_flag_offensive.send(sender=post.__class__, instance=post,
-                                       mark_by=user)
 
     if post.post_type == 'comment':
         # do not hide or delete comments automatically yet,
@@ -177,7 +189,7 @@ def onUnFlaggedItem(post, user, timestamp=None):
 def onAnswerAccept(answer, user, timestamp=None):
     answer.thread.set_accepted_answer(
         answer=answer, actor=user, timestamp=timestamp)
-    question = answer.thread._question_post()
+    question = answer.thread._question_post() #pylint: disable=protected-access
 
     if answer.author != user:
         answer.author.receive_reputation(
@@ -224,7 +236,7 @@ def onAnswerAcceptCanceled(answer, user, timestamp=None):
     answer.thread.accepted_answer = None
     answer.thread.save()
 
-    question = answer.thread._question_post()
+    question = answer.thread._question_post() #pylint: disable=protected-access
 
     if user != answer.author:
         answer.author.receive_reputation(
@@ -260,7 +272,7 @@ def onAnswerAcceptCanceled(answer, user, timestamp=None):
 
 
 @transaction.atomic
-def onUpVoted(vote, post, user, timestamp=None):
+def onUpVoted(vote, post, _user, timestamp=None):
     if timestamp is None:
         timestamp = timezone.now()
     vote.save()
@@ -284,7 +296,7 @@ def onUpVoted(vote, post, user, timestamp=None):
             author.save()
 
             # TODO: this is suboptimal if post is already a question
-            question = post.thread._question_post()
+            question = post.thread._question_post() #pylint: disable=protected-access
 
             reputation = Repute(
                 user=author,
@@ -297,15 +309,13 @@ def onUpVoted(vote, post, user, timestamp=None):
 
 
 @transaction.atomic
-def onUpVotedCanceled(vote, post, user, timestamp=None):
+def onUpVotedCanceled(vote, post, _user, timestamp=None):
     if timestamp is None:
         timestamp = timezone.now()
     vote.delete()
 
     if post.post_type != 'comment':
-        post.vote_up_count = int(post.vote_up_count) - 1
-        if post.vote_up_count < 0:
-            post.vote_up_count = 0
+        post.vote_up_count = max(int(post.vote_up_count) - 1, 0)
 
     post.points = int(post.points) - 1
     post.save()
@@ -322,7 +332,7 @@ def onUpVotedCanceled(vote, post, user, timestamp=None):
         author.save()
 
         # TODO: this is suboptimal if post is already a question
-        question = post.thread._question_post()
+        question = post.thread._question_post() #pylint: disable=protected-access
 
         reputation = Repute(
             user=author,
@@ -352,7 +362,7 @@ def onDownVoted(vote, post, user, timestamp=None):
         author.save()
 
         # TODO: this is suboptimal if post is already a question
-        question = post.thread._question_post()
+        question = post.thread._question_post() #pylint: disable=protected-access
 
         reputation = Repute(
             user=author,
@@ -384,9 +394,7 @@ def onDownVotedCanceled(vote, post, user, timestamp=None):
         timestamp = timezone.now()
     vote.delete()
 
-    post.vote_down_count = int(post.vote_down_count) - 1
-    if post.vote_down_count < 0:
-        post.vote_down_count = 0
+    post.vote_down_count = max(int(post.vote_down_count) - 1, 0)
     post.points = post.points + 1
     post.save()
 
@@ -398,7 +406,7 @@ def onDownVotedCanceled(vote, post, user, timestamp=None):
         author.save()
 
         # TODO: this is suboptimal if post is already a question
-        question = post.thread._question_post()
+        question = post.thread._question_post() #pylint: disable=protected-access
 
         reputation = Repute(
             user=author,

@@ -3,10 +3,10 @@ User policy settings
 """
 from askbot.conf.settings_wrapper import settings
 from askbot.conf.super_groups import LOGIN_USERS_COMMUNICATION
-from askbot.deps import livesettings
+from livesettings import values as livesettings
 from django.conf import settings as django_settings
 from askbot.skins import utils as skin_utils
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from askbot import const
 import re
 
@@ -39,7 +39,7 @@ settings.register(
         USER_SETTINGS,
         'SHOW_ADMINS_PRIVATE_USER_DATA',
         default=False,
-        description=_('Show email addresses to moderators')
+        description=_('Show email addresses to moderators, does not apply to confidential email addresses')
     )
 )
 
@@ -77,6 +77,29 @@ settings.register(
         'ALLOW_ACCOUNT_RECOVERY_BY_EMAIL',
         default = True,
         description = _('Allow account recovery by email')
+    )
+)
+
+settings.register(
+    livesettings.StringValue(
+        USER_SETTINGS,
+        'WHO_CAN_TERMINATE_ACCOUNTS',
+        choices=(('admins', _('administrators')),
+                 ('users', _('account owners and administrators'))),
+        default='admins',
+        description=_('Who can terminate user accounts')
+    )
+)
+
+settings.register(
+    livesettings.StringValue(
+        USER_SETTINGS,
+        'WHO_CAN_ANONYMIZE_ACCOUNTS',
+        choices=(('admins', _('administrators')),
+                 ('mods', _('administrators and moderators')),
+                 ('users', _('account owners, administrators and moderators'))),
+        default='admins',
+        description=_('Who can anonymize and disable accounts')
     )
 )
 

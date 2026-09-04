@@ -1,3 +1,4 @@
+/* global askbot, inherits, SimpleControl, WaitIcon, runMathJax */
 /**
  * @constructor
  */
@@ -61,7 +62,7 @@ PostExpander.prototype.getExpandHandler = function () {
     var me = this;
     return function () {
         var element = me.getElement();
-        var snippet = $(element.parents('.snippet')[0]);
+        var snippet = $(element.parents('.js-snippet')[0]);
         $.ajax({
             type: 'GET',
             dataType: 'json',
@@ -72,6 +73,9 @@ PostExpander.prototype.getExpandHandler = function () {
                     snippet.hide();
                     snippet.html(data.post_html);
                     snippet.fadeIn();
+                    if (askbot.settings.mathjaxEnabled === true) {
+                        runMathJax();
+                    }
                 }
             }
         });

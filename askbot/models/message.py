@@ -1,7 +1,7 @@
 '''Copied from Django 1.3.1 source code, it will use this model to'''
 from django.db import models
 from django.contrib.auth.models import User
-from django.utils.translation import ugettext_lazy
+from django.utils.translation import gettext_lazy
 
 
 class Message(models.Model):
@@ -13,8 +13,8 @@ class Message(models.Model):
     actions. For example, "The poll Foo was created successfully." is a
     message.
     """
-    user = models.ForeignKey(User, related_name='_message_set')
-    message = models.TextField(ugettext_lazy('message'))
+    user = models.ForeignKey(User, related_name='_message_set', on_delete=models.CASCADE)
+    message = models.TextField(gettext_lazy('message'))
 
     class Meta:
         '''Added for backwards compatibility with databases
@@ -22,8 +22,5 @@ class Message(models.Model):
         app_label = 'askbot'
         db_table = 'askbot_message'
 
-    def __unicode__(self):
-        return self.message
-
     def __str__(self):
-        return self.message.encode('utf-8')
+        return self.message

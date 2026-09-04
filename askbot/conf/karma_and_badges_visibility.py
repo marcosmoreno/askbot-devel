@@ -2,9 +2,9 @@
 Settings for making the karma and badge systems visible to
 the users at a different degree
 """
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from askbot.conf.settings_wrapper import settings
-from askbot.deps import livesettings
+from livesettings import values as livesettings
 from askbot.conf.super_groups import REP_AND_BADGES
 
 KARMA_AND_BADGE_VISIBILITY = livesettings.ConfigurationGroup(

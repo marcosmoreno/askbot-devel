@@ -1,16 +1,17 @@
+
 import askbot
 import datetime
 import traceback
+from collections import OrderedDict
 
 from django.conf import settings as django_settings
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.sites.models import Site
-from django.core.management.base import NoArgsCommand
+from django.core.management import BaseCommand
 from django.db import connection
 from django.db.models import Q, F
-from django.utils.datastructures import SortedDict
 from django.utils import timezone
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from django.utils.translation import activate as activate_language
 
 from askbot import const
@@ -50,7 +51,7 @@ def extend_question_list(
     """
     if src is None:#is not QuerySet
         return #will not do anything if subscription of this type is not used
-    if limit and len(dst.keys()) >= askbot_settings.MAX_ALERTS_PER_EMAIL:
+    if limit and len(list(dst.keys())) >= askbot_settings.MAX_ALERTS_PER_EMAIL:
         return
     if cutoff_time is None:
         if hasattr(src, 'cutoff_time'):
@@ -89,11 +90,11 @@ def format_action_count(string, number, output):
         output.append(_(string) % {'num':number})
 
 
-class Command(NoArgsCommand):
-    def handle_noargs(self, **options):
+class Command(BaseCommand):
+    def handle(self, **options):
         if askbot_settings.ENABLE_EMAIL_ALERTS:
             activate_language(django_settings.LANGUAGE_CODE)
-            for user in User.objects.exclude(askbot_profile__status='b').iterator():
+            for user in User.objects.exclude(askbot_profile__status__in=('b', 't')).iterator():
                 try:
                     if email_is_blacklisted(user.email) \
                         and askbot_settings.BLACKLISTED_EMAIL_PATTERNS_MODE == 'strict':
@@ -104,7 +105,7 @@ class Command(NoArgsCommand):
             connection.close()
 
     def format_debug_msg(self, user, content):
-        msg = u"%s site_id=%d user=%s: %s" % ( 
+        msg = "%s site_id=%d user=%s: %s" % (
             timezone.now().strftime('%y-%m-%d %h:%m:%s'),
             SITE_ID,
             repr(user.username),
@@ -115,21 +116,21 @@ class Command(NoArgsCommand):
     def report_exception(self, user):
         """reports exception that happened during sending email alert to user"""
         message = self.format_debug_msg(user, traceback.format_exc())
-        print message
+        print(message)
         admin_email = askbot_settings.ADMIN_EMAIL
         try:
-            subject_line = u"Error processing daily/weekly notification for User '%s' for Site '%s'" % (user.username, SITE_ID)
+            subject_line = "Error processing daily/weekly notification for User '%s' for Site '%s'" % (user.username, SITE_ID)
             send_mail(
                 subject_line=subject_line.encode('utf-8'),
                 body_text=message,
                 recipient_list=[admin_email,]
             )
         except:
-            message = u"ERROR: was unable to report this exception to %s: %s" % (admin_email, traceback.format_exc())
-            print self.format_debug_msg(user, message)
+            message = "ERROR: was unable to report this exception to %s: %s" % (admin_email, traceback.format_exc())
+            print(self.format_debug_msg(user, message))
         else:
-            message = u"Sent email reporting this exception to %s" % admin_email
-            print self.format_debug_msg(user, message)
+            message = "Sent email reporting this exception to %s" % admin_email
+            print(self.format_debug_msg(user, message))
 
     def get_updated_questions_for_user(self, user):
         """
@@ -137,6 +138,11 @@ class Command(NoArgsCommand):
         according to their subscriptions and recorded question
         views
         """
+
+        old_content_cutoff_timestamp = max(
+            user.date_joined, #exclude old stuff
+            django_settings.ASKBOT_DELAYED_EMAIL_ALERTS_CUTOFF_TIMESTAMP
+        )
 
         user_feeds = EmailFeedSetting.objects.filter(
             subscriber=user
@@ -172,10 +178,11 @@ class Command(NoArgsCommand):
         #base question query set for this user
         #basic things - not deleted, not closed, not too old
         #not last edited by the same user
+
         base_qs = Post.objects.get_questions().exclude(
             thread__last_activity_by=user
         ).exclude(
-            thread__last_activity_at__lt=user.date_joined#exclude old stuff
+            thread__last_activity_at__lt=old_content_cutoff_timestamp
         ).exclude(
             deleted=True
         ).exclude(
@@ -230,14 +237,18 @@ class Command(NoArgsCommand):
 
                 if feed.feed_type == 'q_sel':
                     q_sel_A = Q_set_A.filter(thread__followed_by=user)
+                    q_sel_A = q_sel_A[:askbot_settings.MAX_ALERTS_PER_EMAIL]
                     q_sel_A.cutoff_time = cutoff_time #store cutoff time per query set
                     q_sel_B = Q_set_B.filter(thread__followed_by=user)
+                    q_sel_B = q_sel_B[:askbot_settings.MAX_ALERTS_PER_EMAIL]
                     q_sel_B.cutoff_time = cutoff_time #store cutoff time per query set
 
                 elif feed.feed_type == 'q_ask':
                     q_ask_A = Q_set_A.filter(author=user)
+                    q_ask_A = q_ask_A[:askbot_settings.MAX_ALERTS_PER_EMAIL]
                     q_ask_A.cutoff_time = cutoff_time
                     q_ask_B = Q_set_B.filter(author=user)
+                    q_ask_B = q_ask_B[:askbot_settings.MAX_ALERTS_PER_EMAIL]
                     q_ask_B.cutoff_time = cutoff_time
 
                 elif feed.feed_type == 'q_ans':
@@ -259,7 +270,7 @@ class Command(NoArgsCommand):
                     q_all_B.cutoff_time = cutoff_time
 
         #build ordered list questions for the email report
-        q_list = SortedDict()
+        q_list = OrderedDict()
 
         #todo: refactor q_list into a separate class?
         extend_question_list(q_sel_A, q_list, languages=languages)
@@ -276,19 +287,15 @@ class Command(NoArgsCommand):
             if feed.should_send_now():
                 cutoff_time = feed.get_previous_report_cutoff_time()
                 comments = Post.objects.get_comments().filter(
-                    added_at__lt=cutoff_time
-                ).exclude(author=user).select_related('parent')
+                    added_at__lt=cutoff_time,
+                    parent__author=user
+                ).exclude(author=user).select_related('parent', 'parent__thread')
                 q_commented = list()
 
                 for c in comments:
-                    post = c.parent
-
-                    if post.author_id != user.pk:
-                        continue
-
                     #skip is post was seen by the user after
                     #the comment posting time
-                    q_commented.append(post.get_origin_post())
+                    q_commented.append(c.parent.get_origin_post())
 
                 extend_question_list(
                     q_commented,
@@ -355,7 +362,7 @@ class Command(NoArgsCommand):
         #for each question, whether it needs to be included or not
         #into the report
 
-        for q, meta_data in q_list.items():
+        for q, meta_data in list(q_list.items()):
             #this loop edits meta_data for each question
             #so that user will receive counts on new edits new answers, etc
             #and marks questions that need to be skipped
@@ -374,13 +381,13 @@ class Command(NoArgsCommand):
                 emailed_at = update_info.active_at
             except Activity.DoesNotExist:
                 update_info = Activity(
-                                    user=user, 
-                                    content_object=q, 
+                                    user=user,
+                                    content_object=q,
                                     activity_type=EMAIL_UPDATE_ACTIVITY
                                 )
                 emailed_at = datetime.datetime(1970, 1, 1)  #long time ago
                 if django_settings.USE_TZ:
-                    emailed_at = timezone.make_aware(emailed_at, timezone.utc)
+                    emailed_at = timezone.make_aware(emailed_at, datetime.timezone.utc)
             except Activity.MultipleObjectsReturned:
                 raise Exception(
                                 'server error - multiple question email activities '
@@ -402,8 +409,9 @@ class Command(NoArgsCommand):
             q_rev = q_rev.exclude(author=user)
 
             #now update all sorts of metadata per question
-            meta_data['q_rev'] = len(q_rev)
-            if len(q_rev) > 0 and q.added_at == q_rev[0].revised_at:
+            q_rev_count = q_rev.count()
+            meta_data['q_rev'] = q_rev_count
+            if q_rev_count > 0 and q.added_at == q_rev[0].revised_at:
                 meta_data['q_rev'] = 0
                 meta_data['new_q'] = True
             else:
@@ -413,10 +421,12 @@ class Command(NoArgsCommand):
                 thread=q.thread,
                 added_at__gt=emailed_at,
                 deleted=False,
-            )
-            new_ans = new_ans.exclude(author=user)
-            meta_data['new_ans'] = len(new_ans)
+            ).exclude(author=user)
+            new_ans_count = new_ans.count()
+            meta_data['new_ans'] = new_ans_count
 
+            #ans_ids includes user's own answers so we can detect
+            #edits by others on the user's answers
             ans_ids = Post.objects.get_answers(user).filter(
                 thread=q.thread,
                 added_at__gt=emailed_at,
@@ -426,20 +436,21 @@ class Command(NoArgsCommand):
             ans_rev = PostRevision.objects.filter(post__id__in = ans_ids)
             ans_rev = ans_rev.exclude(author=user).distinct()
 
-            meta_data['ans_rev'] = len(ans_rev)
+            ans_rev_count = ans_rev.count()
+            meta_data['ans_rev'] = ans_rev_count
 
             comments = meta_data.get('comments', 0)
             mentions = meta_data.get('mentions', 0)
 
             #print meta_data
             #finally skip question if there are no news indeed
-            if len(q_rev) + len(new_ans) + len(ans_rev) + comments + mentions == 0:
+            if q_rev_count + new_ans_count + ans_rev_count + comments + mentions == 0:
                 meta_data['skip'] = True
                 #print 'skipping'
             else:
                 meta_data['skip'] = False
                 #print 'not skipping'
-                update_info.active_at = timezone.now() 
+                update_info.active_at = timezone.now()
                 if DEBUG_THIS_COMMAND == False:
                     update_info.save() #save question email update activity
         #q_list is actually an ordered dictionary
@@ -455,26 +466,26 @@ class Command(NoArgsCommand):
         #todo: q_list is a dictionary, not a list
         q_list = self.get_updated_questions_for_user(user)
 
-        if len(q_list.keys()) == 0:
+        if len(list(q_list.keys())) == 0:
             return
 
         num_q = 0
 
-        for question, meta_data in q_list.items():
+        for question, meta_data in list(q_list.items()):
             if meta_data['skip']:
                 del q_list[question]
             else:
                 num_q += 1
         if num_q > 0:
-            threads = Thread.objects.filter(id__in=[qq.thread_id for qq in q_list.keys()])
+            threads = Thread.objects.filter(id__in=[qq.thread_id for qq in list(q_list.keys())])
             tag_summary = Thread.objects.get_tag_summary_from_threads(threads)
 
-            question_count = len(q_list.keys())
+            question_count = len(list(q_list.keys()))
 
             items_added = 0
             items_unreported = 0
             questions_data = list()
-            for q, meta_data in q_list.items():
+            for q, meta_data in list(q_list.items()):
                 act_list = []
                 if meta_data['skip']:
                     continue

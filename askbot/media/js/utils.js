@@ -1,3 +1,5 @@
+/* global askbot, jQuery, ngettext, gettext, interpolate, MathJax */
+
 /**
  * attention - this function needs to be retired
  * as it cannot accurately give url to the media file
@@ -5,6 +7,14 @@
 var mediaUrl = function (resource) {
     return askbot.settings.static_url + 'default' + '/' + resource;
 };
+
+
+function fixedEncodeURIComponent(str) {
+  return encodeURIComponent(str).replace(/[!'()*]/g, function(c) {
+    return '%' + c.charCodeAt(0).toString(16);
+  });
+}
+
 
 /** todo: look up available alternatives
  * this makes assumption that url is path?param1=value1&param2=value2...
@@ -69,6 +79,30 @@ var csrfSafeMethod = function(method) {
     return (/^(GET|HEAD|OPTIONS|TRACE)$/.test(method));
 };
 
+function copyToClipboard(textToCopy) {
+    // navigator clipboard api needs a secure context (https)
+    if (navigator.clipboard && window.isSecureContext) {
+        // navigator clipboard api method'
+        return navigator.clipboard.writeText(textToCopy);
+    } else {
+        // text area method
+        let textArea = document.createElement("textarea");
+        textArea.value = textToCopy;
+        // make the textarea out of viewport
+        textArea.style.position = "fixed";
+        textArea.style.left = "-999999px";
+        textArea.style.top = "-999999px";
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        return new Promise((res, rej) => {
+            // here the magic happens
+            document.execCommand('copy') ? res() : rej();
+            textArea.remove();
+        });
+    }
+}
+
 var sameOrigin = function(url) {
     var host = document.location.host;
     var protocol = document.location.protocol;
@@ -92,6 +126,85 @@ $.ajaxSetup({
             xhr.setRequestHeader("X-CSRFToken", getCookie(csrfCookieName));
         }
     }
+});
+
+/**
+ * Render a duration in seconds as a translated human string.
+ * Mirrors askbot.utils.ratelimit._humanize_seconds — pick the largest
+ * clean unit (hour / minute / second) using ngettext for plurals.
+ * Caller MUST guard seconds >= 1: ngettext for `count === 0` resolves
+ * to the plural form in English ("0 seconds") but is locale-dependent
+ * elsewhere (e.g. French treats 0 as singular), so 0 is excluded
+ * upstream rather than handled here.
+ */
+var humanizeSeconds = function (seconds) {
+    if (seconds >= 3600) {
+        var hours = Math.floor(seconds / 3600);
+        return interpolate(
+            ngettext('%(count)s hour', '%(count)s hours', hours),
+            { count: hours },
+            true
+        );
+    }
+    if (seconds >= 60) {
+        var minutes = Math.floor(seconds / 60);
+        return interpolate(
+            ngettext('%(count)s minute', '%(count)s minutes', minutes),
+            { count: minutes },
+            true
+        );
+    }
+    return interpolate(
+        ngettext('%(count)s second', '%(count)s seconds', seconds),
+        { count: seconds },
+        true
+    );
+};
+
+/**
+ * Global handler for content-negotiated 429 responses from
+ * askbot.utils.ratelimit. Surfaces a banner via the existing notify
+ * API so AJAX callers get the same UX as page-load callers (which
+ * see a server-rendered session message).
+ *
+ * Only fires when status is 429, Content-Type is application/json,
+ * AND body.error === 'rate_limited'. Plain-text 429s fall through
+ * (per-IP middleware, pre-ae2). Per-call-site error handlers
+ * continue to fire; a call site that wants to suppress the global
+ * banner should use $.ajax({ global: false }).
+ */
+$(document).ajaxError(function (event, xhr) {
+    if (xhr.status !== 429) {
+        return;
+    }
+    var contentType = xhr.getResponseHeader('Content-Type') || '';
+    if (contentType.indexOf('application/json') === -1) {
+        return;
+    }
+    var body = xhr.responseJSON || {};
+    if (body.error !== 'rate_limited') {
+        return;
+    }
+    // Only one rate-limit banner at a time. The id is removed together
+    // with the .js-system-message subtree by notify.clear / notify.close,
+    // so the next 429 after dismissal surfaces a fresh banner.
+    if (document.getElementById('js-rate-limit-banner')) {
+        return;
+    }
+    var retryAfter = body.retry_after;
+    var msg;
+    // humanizeSeconds requires retryAfter >= 1 (see helper docstring) —
+    // 0 / missing / non-numeric values fall through to the generic copy.
+    if (typeof retryAfter === 'number' && retryAfter > 0) {
+        msg = interpolate(
+            gettext('Too many requests. Please wait %(time)s and try again.'),
+            { time: humanizeSeconds(retryAfter) },
+            true
+        );
+    } else {
+        msg = gettext('Too many requests, please slow down.');
+    }
+    notify.show(msg, false, 'js-rate-limit-banner');
 });
 
 
@@ -288,25 +401,26 @@ var inArray = function (item, itemsList) {
 };
 
 var showMessage = function (element, msg, where) {
-    var div = $('<div class="vote-notification"><h3>' + msg + '</h3>(' +
-    gettext('click to close') + ')</div>');
-    where = where || 'parent';
+  var div = $('<div class="js-error-popup">' + msg + 
+              '<p class="js-error-popup-hint">(' + gettext('click to close') + ')</p>' +
+              '</div>');
+  where = where || 'parent';
 
-    div.click(function (event) {
-        if (event.target.nodeName === 'A') {
-            return true;
-        }
-        $('.vote-notification').fadeOut('fast', function () { $(this).remove(); });
-        return false;
-    });
-
-    if (where === 'parent') {
-        element.parent().append(div);
-    } else {
-        element.after(div);
+  div.click(function (event) {
+    if (event.target.nodeName === 'A') {
+      return true;
     }
+    $('.js-error-popup').fadeOut('fast', function () { $(this).remove(); });
+    return false;
+  });
 
-    div.fadeIn('fast');
+  if (where === 'parent') {
+    element.parent().append(div);
+  } else {
+    element.append(div);
+  }
+
+  div.fadeIn('fast');
 };
 
 //outer html hack - https://github.com/brandonaaron/jquery-outerhtml/
@@ -345,9 +459,14 @@ var makeKeyHandler = function (key, callback) {
 };
 
 
-var setupButtonEventHandlers = function (button, callback) {
+var setupButtonEventHandlers = function (button, callback, data) {
+  if (data) {
+    button.keydown(data, makeKeyHandler(13, callback));
+    button.click(data, callback);
+  } else {
     button.keydown(makeKeyHandler(13, callback));
     button.click(callback);
+  }
 };
 
 var removeButtonEventHandlers = function (button) {
@@ -381,14 +500,13 @@ var setCheckBoxesIn = function (selector, value) {
 var notify = (function () {
     var visible = false;
     return {
-        show: function (html, autohide) {
+        show: function (html, autohide, id) {
             if (html) {
                 $('body').addClass('user-messages');
-                var par = $('<p class="notification"></p>');
-                par.html(html);
-                $('.notify').prepend(par);
+                var msg = new SystemMessage(html, id);
+                $('.js-system-messages .remove-messages-container').after(msg.getElement());
             }
-            $('.notify').fadeIn('slow');
+            $('.js-system-messages').fadeIn('slow');
             visible = true;
             if (autohide) {
                 setTimeout(
@@ -401,18 +519,19 @@ var notify = (function () {
             }
         },
         clear: function () {
-            $('.notify').empty();
+            $('.js-system-messages .js-system-message').remove();
         },
         close: function (doPostback) {
+            $('.js-system-messages .js-system-message').remove();
+            $('.js-system-messages').fadeOut('fast');
+            $('body').removeClass('user-messages');
+            visible = false;
             if (doPostback) {
                 $.post(
                     askbot.urls.mark_read_message,
                     { formdata: 'required' }
                 );
             }
-            $('.notify').fadeOut('fast');
-            $('body').removeClass('user-messages');
-            visible = false;
         },
         isVisible: function () { return visible; }
     };
@@ -435,3 +554,14 @@ var getSuperClass = function (cls) {
     return cls.superClass_;
 };
 
+if (!Object.entries) {
+  Object.entries = function( obj ){
+    var ownProps = Object.keys( obj ),
+        i = ownProps.length,
+        resArray = new Array(i); // preallocate the Array
+    while (i--)
+      resArray[i] = [ownProps[i], obj[ownProps[i]]];
+
+    return resArray;
+  };
+}

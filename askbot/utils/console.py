@@ -1,9 +1,24 @@
 """functions that directly handle user input
 """
+import math
 import sys
 import time
 import logging
 from askbot.utils import path
+
+YELLOW = '\033[33m'
+RED = '\033[31m'
+BOLD = '\033[1m'
+RESET = '\033[0m'
+
+def bold(text):
+    """Returns string printable in bold red"""
+    return RED + BOLD + text + RESET
+
+
+def decode_input(input: str):
+    return input.strip()
+
 
 def start_printing_db_queries():
     """starts logging database queries into console,
@@ -12,7 +27,7 @@ def start_printing_db_queries():
     logger.setLevel(logging.DEBUG)
     logger.addHandler(logging.StreamHandler())
 
-def choice_dialog(prompt_phrase, choices = None, invalid_phrase = None):
+def choice_dialog(prompt_phrase, choices=None, invalid_phrase=None, default=None):
     """prints a prompt, accepts keyboard input
     and makes sure that user response is one of given
     in the choices argument, which is required
@@ -22,19 +37,30 @@ def choice_dialog(prompt_phrase, choices = None, invalid_phrase = None):
     placeholder
     """
     assert(hasattr(choices, '__iter__'))
-    assert(not isinstance(choices, basestring))
+    assert(not isinstance(choices, str))
+
+    choices = [str(ch) for ch in choices]
+
+    if default is None:
+        prompt = '%s\ntype %s\n> ' % (prompt_phrase, '/'.join(choices))
+    else:
+        default = str(default)
+        prompt = '%s\nType %s, press ENTER to select %s\n> ' % (prompt_phrase, '/'.join(choices), default)
+
     while 1:
-        response = raw_input(
-            '\n%s\ntype %s: ' % (prompt_phrase, '/'.join(choices))
-        )
+        response = input(prompt).strip()
+
+        if response == '' and default:
+            return default
+
         if response in choices:
             return response
         elif invalid_phrase != None:
             opt_string = ','.join(choices)
-            print invalid_phrase % {'opt_string': opt_string}
-        time.sleep(1)
+            print(invalid_phrase % {'opt_string': opt_string})
+        time.sleep(.1)
 
-def numeric_choice_dialog(prompt_phrase, choices):
+def numeric_choice_dialog(prompt_phrase, choices, default=None):
     """Prints a list of choices with numeric options and requires the
     user to select a single choice from the list.
 
@@ -48,16 +74,25 @@ def numeric_choice_dialog(prompt_phrase, choices):
     :returns: (int) index number of the choice selected by the user
     """
     assert(hasattr(choices, '__iter__'))
-    assert(not isinstance(choices, basestring))
+    assert(not isinstance(choices, str))
     choice_menu = "\n".join(["%d - %s" % (i,x) for i, x in enumerate(choices)])
+    if default:
+        prompt_phrase = '%s\n%s\nPress ENTER to select %s> ' % (choice_menu, prompt_phrase, default)
+    else:
+        prompt_phrase = '%s\n%s> ' % (choice_menu, prompt_phrase)
+
     while True:
-        response = raw_input('\n%s\n%s> ' % (choice_menu, prompt_phrase))
+        response = input(prompt_phrase).strip()
+
+        if response == '' and default:
+            return default
+
         try:
             index = int(response)
         except ValueError:
             index = False
         if index is False or index < 0 or index >= len(choices):
-            print "\n*** Please enter a number between 0 and %d ***" % (len(choices)-1)
+            print("\n*** Please enter a number between 0 and %d ***" % (len(choices)-1))
         else:
             return index
 
@@ -80,16 +115,16 @@ def numeric_multiple_choice_dialog(prompt_phrase, choices, all_option=False):
     the user
     """
     assert(hasattr(choices, '__iter__'))
-    assert(not isinstance(choices, basestring))
+    assert(not isinstance(choices, str))
     if all_option:
         choices.insert(0, 'ALL')
     choice_menu = "\n".join(["%d - %s" % (i,x) for i, x in enumerate(choices)])
     choice_indexes = []
     index = False
     while True:
-        response = raw_input('\n%s\n%s> ' % (choice_menu, prompt_phrase))
+        response = input('\n%s\n%s> ' % (choice_menu, prompt_phrase))
         selections = response.split()
-        print "selections: %s" % selections
+        print("selections: %s" % selections)
         for c in selections:
             try:
                 index = int(c)
@@ -97,33 +132,41 @@ def numeric_multiple_choice_dialog(prompt_phrase, choices, all_option=False):
                 index = False
             if index < 0 or index >= len(choices):
                 index = False
-                print "\n*** Please enter only numbers between 0 and " +\
-                      "%d separated by spaces ***" % (len(choices)-1)
+                print("\n*** Please enter only numbers between 0 and " +\
+                      "%d separated by spaces ***" % (len(choices)-1))
                 break
             else:
                 choice_indexes.append(index)
         if index:
             if all_option and 0 in choice_indexes and len(choice_indexes) > 1:
-                print "\n*** You cannot include other choices with the ALL " +\
-                      "option ***"
+                print("\n*** You cannot include other choices with the ALL " +\
+                      "option ***")
             else:
                 return choice_indexes
 
-def simple_dialog(prompt_phrase, required=False):
+def simple_dialog(prompt_phrase, required=False, default=None):
     """asks user to enter a string, if `required` is True,
     will repeat question until non-empty input is given
     """
+    if required:
+        prompt_phrase += ' (required)'
+    if default:
+        prompt_phrase += f'\nPress ENTER to use {default}.'
+    elif default == '':
+        prompt_phrase += '\nPress ENTER to use empty string (default value).'
+
     while 1:
+        if required and default:
+            raise RuntimeError('provide either `required` or `default')
 
-        if required:
-            prompt_phrase += ' (required)'
-
-        response = raw_input(prompt_phrase + '\n> ').strip()
+        response = input(prompt_phrase + '\n> ').strip()
+        if (not response) and (default is not None):
+            return default
 
         if response or required is False:
             return response
 
-        time.sleep(1)
+        time.sleep(.1)
 
 
 def get_yes_or_no(prompt_phrase, default=None):
@@ -138,13 +181,14 @@ def get_yes_or_no(prompt_phrase, default=None):
 
     :returns: (str) 'yes' or 'no'
     """
+    prompt_phrase += ' (yes/no)'
+    if default:
+        prompt_phrase += '[%s] :' % default
+    else:
+        prompt_phrase += ':'
+
     while True:
-        prompt_phrase += ' (yes/no)'
-        if default:
-            prompt_phrase += '\n[%s] >' % default
-        else:
-            prompt_phrase += '\n >'
-        response = raw_input(prompt_phrase).strip()
+        response = input(prompt_phrase).strip()
         if not response and default:
             return default
         if response in ('yes', 'no'):
@@ -170,7 +214,7 @@ def open_new_file(prompt_phrase, extension = '', hint = None):
         file_object = path.create_file_if_does_not_exist(file_path, print_warning = True)
 
     while file_object == None:
-        file_path = raw_input(prompt_phrase)
+        file_path = input(prompt_phrase)
         file_path = path.extend_file_name(file_path, extension)
         file_object = path.create_file_if_does_not_exist(file_path, print_warning = True)
 
@@ -182,7 +226,7 @@ def print_action(action_text, nowipe = False):
     """
     #for some reason sys.stdout.write does not work here
     #when action text is unicode
-    print action_text,
+    print(action_text, end=' ')
     sys.stdout.flush()
     if nowipe == False:
         #return to the beginning of the word
@@ -206,15 +250,16 @@ class ProgressBar(object):
     """A wrapper for an iterator, that prints
     a progress bar along the way of iteration
     """
-    def __init__(self, iterable, length, message = ''):
+    def __init__(self, iterable, length, message='', silent=False):
         self.iterable = iterable
         self.length = length
         self.counter = float(0)
         self.max_barlen = 60
-        self.curr_barlen = 0
+        self.curr_barlen: float = 0
         self.progress = ''
-        if message and length > 0:
-            print message
+        self.silent = silent
+        if message and length > 0 and not self.silent:
+            print(message)
 
 
     def __iter__(self):
@@ -225,14 +270,14 @@ class ProgressBar(object):
 
         self.backspace_progress_percent()
 
-        tics_to_write = 0
+        tics_to_write = 0.0
         if self.length < self.max_barlen:
             tics_to_write = self.max_barlen/self.length
         elif int(self.counter) % (self.length/self.max_barlen) == 0:
-            tics_to_write = 1
+            tics_to_write = 1.0
 
         if self.curr_barlen + tics_to_write <= self.max_barlen:
-            sys.stdout.write('-' * tics_to_write)
+            sys.stdout.write('-' * int(math.floor(tics_to_write)))
             self.curr_barlen += tics_to_write
 
         self.print_progress_percent()
@@ -242,6 +287,8 @@ class ProgressBar(object):
 
     def print_progress_percent(self):
         """prints percent of achieved progress"""
+        if self.silent:
+            return
         self.progress = ' %.2f%%' % (100 * (self.counter/self.length))
         sys.stdout.write(self.progress)
         sys.stdout.flush()
@@ -249,19 +296,21 @@ class ProgressBar(object):
     def finish_progress_bar(self):
         """brint the last bars, to make all bars equal length"""
         self.backspace_progress_percent()
-        sys.stdout.write('-' * (self.max_barlen - self.curr_barlen))
+        sys.stdout.write('-' * int(math.floor((self.max_barlen - self.curr_barlen))))
 
-    def next(self):
+    def __next__(self):
 
         try:
-            result = self.iterable.next()
+            result = next(self.iterable)
         except StopIteration:
-            if self.length > 0:
+            if self.length > 0 and not self.silent:
                 self.finish_progress_bar()
                 self.print_progress_percent()
                 sys.stdout.write('\n')
             raise
 
-        self.print_progress_bar()
+        if not self.silent:
+            self.print_progress_bar()
+
         self.counter += 1
         return result

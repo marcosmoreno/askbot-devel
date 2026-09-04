@@ -1,189 +1,93 @@
 How to upgrade Askbot
 =====================
 
-NOTE: back up the database and customized files before upgrading.
+NOTE: always back up the database and customized files before upgrading!
 
-1) Django Version support.
---------------------------
+These instructions assume that you are working with a Unix-like OS,
+such as `Linux` or `MacOS` and a Python environment.
 
-Currently Askbot supports major versions of Django `1.5`, `1.6`, `1.7` 
-and `1.8`, however - a corresponding version of Askbot must be selected for
-each version of the Django framework as shown below:
+1) Introduction.
+----------------
 
-+---------------------------------+-----------------------+
-| Version of the Django framework | Version of Askbot (*) |
-+=================================+=======================+
-| `1.5.x`                         | `0.7.x` or `0.8.x`(**)|
-+---------------------------------+-----------------------+
-| `1.6.x`                         | `0.8.x` (**)          |
-+---------------------------------+-----------------------+
-| `1.7.x`                         | `0.9.x`               |
-+---------------------------------+-----------------------+
-| `1.8.x`                         | `0.10.x`              |
-+---------------------------------+-----------------------+
+Askbot `0.13.x` supports Django `4.2` and `5.2` and requires `Python 3.10+`.
+Earlier versions support older Django and Python releases - see the
+compatibility table at the end of this document.
 
-Note (*): select latest version of the corresponding release series,
-x means the latest minor release number.
+Askbot versions start with `0`, for example `0.11.2`.
+Versions with different second numbers should be considered as different major versions.
 
-To automatically install the latest available version within the series,
-use the following pip commmand (here we want to install version 0.8.x)::
+When upgrading across multiple major versions, upgrade one major version at a time,
+by upgrading to the latest release of each major version (explained in the section 2 below).
 
-   `pip install 'askbot<0.9'`.
+For example, when upgrading from `0.7.x` to `0.11.x`, it is best to upgrade to `0.8.x` first, then to `0.9.x`, and so on.
 
-Note (**): releases of series `0.8` must be used only to migrate
-From Django `1.5` and below.
+The best practice is to first make a test migration by creating a new
+database with your current content,
+then put your site in maintenance mode
+and run the production migration.
 
-2) Upgrade of the Askbot software.
-----------------------------------
+2) Database migrations.
+-----------------------
 
-Before running the upgrade scripts - prepare fresh backup of the database,
-`settings.py` file and any other files that you've customized.
+Configure a fresh uncustomized installation of Askbot of desired version.
 
-If you are upgrading from one of the versions of `0.7.x` or earlier
-two steps will be necessary.
+First, decide which version of Python is required. For Askbot versions `0.12.x` and later, use `Python 3.10+`.
+For `0.11.x` use `Python 3.6-3.10`, and for earlier versions use `Python 2.7`. Then install Askbot.
 
-* Upgrade to `0.8.x`
-* Upgrade from `0.8.x` to `0.9.x` or `0.10.x` - depending 
-  on the version of Django you want to use
+For example, for the latest `0.11.x` run:
 
-Two steps are required because starting Django 1.7, the mechanism of database
-migrations changed. Version `0.8.x` is a stepping stone to the later versions,
-which prepares the database.
+    pip install 'askbot<0.12'
 
-2.1) Upgrade to version 0.8.x
-=============================
+Configure this version by running `askbot-setup` and follow the instructions.
+During the configuration, point your instance to the database.
 
-Version `0.8.x` can be installed directly over the previous installation::
+Then, run the following command to upgrade the database:
 
-  pip uninstall askbot && pip install 'askbot<0.9'
+    python manage.py migrate
 
-Pip installs software from the Python Package Index 
-(https://pypi.python.org/pypi), alternatively, Askbot can be installed from
-the GitHub repository (https://github.com/ASKBOT/askbot-devel) with the
-basic knowledge of `git` version control system.
+When working with versions `0.8.x` and earlier, instead run the following command:
 
-After that run `python manage.py migrate`. The script might ask you to 
-upgrade some modules first, do that, then repeat the command.
+    python manage.py syncdb --migrate
 
-2.2) Upgrade to 0.9.x or 0.10.x into a new Python environment
-=============================================================
+Repeat the above steps until you have upgraded to the desired major version.
 
-Upgrading to further options is easier to achieve 
-(for an alternative, see section 2.3) by installation into
-a new environment::
+3) Finalize your upgrade.
+-------------------------
 
-  mkdir myproj
-  cd myproj
-  virtualenv env --no-site-packages
-  source env/bin/activate
-  pip install 'askbot<0.11' #assuming you want 0.10.x
-  askbot-setup #answer questions - use the same database as before
-  python manage.py migrate --fake-initial --noinput
-  python manage.py collectstatic --noinput
+One your database is migrated, you can integrate your customized settings into the project's `settings.py` file.
 
-When upgrading to 0.9.x version, askbot version should be specified
-with::
+Finally, collect the static files:
 
-  pip install 'askbot<0.10'
+  python manage.py collectstatic
 
-And command should be without the `--fake-initial` parameter::
+Test your migration by running the dev server:
 
-  python manage.py migrate --noinput
+  python manage.py runserver
 
-Above instruction suggests using pip, hovewer it is also possible to
-clone the git repository, fetch and checkout the necessary version and run
-`python setup.py develop`.
+If everything works, your site can be deployed to the production.
 
-This page does yet cover the case where upgrade is done in-place, without 
-creating of the new Python virtual environment. If you decide to upgrade
-in-place::
+4) Compatible versions of Askbot, Django and Python.
+----------------------------------------------------
 
-    * make changes in the `settings.py` file, replace `manage.py` and
-    `urls.py` files. Templates for these files are available in 
-    `askbot/setup_templates` directory.
-    might give more specific information about the necessary changes.
-    * remove old `*.pyc` files: rm `find . -name '*.pyc'`
-    * make necessary module upgrades
+The following table shows the compatibility of Askbot versions with Django and Python versions.
 
-Future version of this page might have more specific steps to take
-when upgrading in place.
++-----------------------+---------------------------------+-------------------+
+| Version of Askbot (*) | Version of the Django framework | Version of Python |
++=======================+=================================+===================+
+| `0.13.x`              | `4.2`, `5.2`                    | `3.10+`           |
++-----------------------+---------------------------------+-------------------+
+| `0.12.x`              | `4.2`                           | `3.10+`           |
++-----------------------+---------------------------------+-------------------+
+| `0.11.x`              | `2.x - 3.x`                     | `3.6-3.10`        |
++-----------------------+---------------------------------+-------------------+
+| `0.10.x`              | `1.8.x`                         | `2.7`             |
++-----------------------+---------------------------------+-------------------+
+| `0.9.x`               | `1.7.x`                         | `2.7`             |
++-----------------------+---------------------------------+-------------------+
+| `0.8.x` (*)           | `1.6.x`                         | `2.7`             |
++-----------------------+---------------------------------+-------------------+
+| `0.7.x`               | `1.5.x`                         | `2.7`             |
++-----------------------+---------------------------------+-------------------+
 
-2.3) Upgrade to 0.9.x over the existing installation of 0.8.x
-=============================================================
-
-This option is an alternative to one described in the section above.
-It is a bit more involved, but will help you to "grandfather" the
-`settings.py` and `urls.py` files that might have been customized.
-
-It is also possible to upgrade in the same manner to version 0.10.x,
-but with some differences that are described in section 2.4.
-
-`cd` into the directory where your file is installed (the one with
-the `settings.py` file, it is also called the Django project directory).
-Then the following commands::
-
-    rm `find . -name '*.pyc'` #delete all the left over .pyc files
-    pip uninstall askbot django django-followit South --yes
-    pip install 'askbot<0.10' #installs latest 0.9.x
-
-Edit the `settings.py` file:
-
-* remove `'south'`, from `INSTALLED_APPS`
-* remove `SOUTH_TESTS_MIGRATE` from `settings.py`
-* replace entry `'group_messaging'` with `'askbot.deps.group_messaging'`
-  in the `INSTALLED_APPS`
-* add line `ATOMIC_REQUESTS=True`
-
-Replace file `manage.py` with one in askbot/setup_templates/manage.py.
-It might be a bit hard to find this file manually, the command below
-should help (copy/paste and run)::
-
-
-    cp `python -c 'import askbot, os; print os.path.join(os.path.dirname(askbot.__file__), "setup_templates", "manage.py")'` .
-
-Migrate the database and collect the static files::
-
-    python manage.py migrate --noinput
-    python manage.py collectstatic --noinput
-
-Now the site is upgraded to version 0.9.x.
-
-2.3) Upgrade to 0.10.x over the installation 0.8.x
-==================================================
-
-Upgrade to version `0.10.x` follows the same steps and 
-in the same order as above. This section describes only
-the differences, specific to version `0.10.x`.
-
-Install the latest version `0.10.x`, instead of `0.9.x`::
-
-    pip install 'askbot<0.11' #installs latest 0.10.x
-
-When editing the `settings.py` file, in addition to changes made for `0.9.x`,
-do the following:
-
-* Remove whole entries `TEMPLATE_LOADERS` and `TEMPLATE_CONTEXT_PROCESSORS`
-* Remove sub-entry `'django.middleware.transaction.TransactionMiddleware'`
-  from `MIDDLEWARE_CLASSES`
-* Add `TEMPLATES` entry with the following contents::
-
-  TEMPLATES = (
-    {
-        'BACKEND': 'askbot.skins.template_backends.AskbotSkinTemplates',
-    },
-    {
-        'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
-        'APP_DIRS': True,
-        'OPTIONS': {
-            'context_processors': [
-                'django.core.context_processors.request',
-                'django.contrib.auth.context_processors.auth',
-            ]
-        }
-    },
-  )
- 
-Lastly, command `migrate` is run with an extra `--fake-initial` option::
-
-    python manage.py migrate --noinput --fake-initial
+(*) Versions `0.8.x` are exclusively for migrating the database from `0.7.x` to `0.9.x`,
+versions `0.8.x` should not be used in production.

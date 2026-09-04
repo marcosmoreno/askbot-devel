@@ -5,7 +5,7 @@ from django.forms import EmailField, ValidationError
 from askbot.conf import settings as askbot_settings
 from askbot.deps.django_authopenid.models import UserAssociation
 from askbot.signals import user_registered
-from askbot.utils.loading import load_module
+from askbot.utils.loading import load_function
 
 LOG = logging.getLogger(__name__)
 
@@ -90,8 +90,8 @@ def ldap_authenticate_default(username, password):
 
         if master_username and master_password:
             ldap_session.simple_bind_s(
-                master_username.encode(encoding),
-                master_password.encode(encoding)
+                master_username,
+                master_password
             )
 
         user_filter = askbot_settings.LDAP_USER_FILTER_TEMPLATE % (
@@ -102,8 +102,8 @@ def ldap_authenticate_default(username, password):
         email_field = askbot_settings.LDAP_EMAIL_FIELD
 
         get_attrs = [
-            email_field.encode(encoding),
-            login_name_field.encode(encoding)
+            email_field,
+            login_name_field
             #str(askbot_settings.LDAP_USERID_FIELD)
             #todo: here we have a chance to get more data from LDAP
             #maybe a point for some plugin
@@ -114,22 +114,22 @@ def ldap_authenticate_default(username, password):
         surname_field = askbot_settings.LDAP_SURNAME_FIELD.strip()
 
         if given_name_field and surname_field:
-            get_attrs.append(given_name_field.encode(encoding))
-            get_attrs.append(surname_field.encode(encoding))
+            get_attrs.append(given_name_field)
+            get_attrs.append(surname_field)
         elif common_name_field:
-            get_attrs.append(common_name_field.encode(encoding))
+            get_attrs.append(common_name_field)
 
         # search ldap directory for user
         user_search_result = ldap_session.search_s(
-            askbot_settings.LDAP_BASE_DN.encode(encoding),
+            askbot_settings.LDAP_BASE_DN,
             ldap.SCOPE_SUBTREE,
-            user_filter.encode(encoding),
+            user_filter,
             get_attrs
         )
         if user_search_result: # User found in LDAP Directory
             user_dn = user_search_result[0][0]
             user_information = user_search_result[0][1]
-            ldap_session.simple_bind_s(user_dn, password.encode(encoding)) #raises INVALID_CREDENTIALS
+            ldap_session.simple_bind_s(user_dn, password) #raises INVALID_CREDENTIALS
             ldap_session.unbind_s()
 
             if given_name_field and surname_field:
@@ -141,9 +141,9 @@ def ldap_authenticate_default(username, password):
                 first_name, last_name = split_name(common_name, common_name_format)
 
             user_info = {
-                'first_name': first_name,
-                'last_name': last_name,
-                'ldap_username': user_information[login_name_field][0],
+                'first_name': first_name.decode('utf-8'),
+                'last_name': last_name.decode('utf-8'),
+                'ldap_username': user_information[login_name_field][0].decode('utf-8'),
                 'success': True
             }
 
@@ -156,13 +156,13 @@ def ldap_authenticate_default(username, password):
         else:
             user_info['success'] = False
 
-    except ldap.INVALID_CREDENTIALS, e:
+    except ldap.INVALID_CREDENTIALS as e:
         user_info['success'] = False
-    except ldap.LDAPError, e:
+    except ldap.LDAPError as e:
         LOG.error("LDAPError Exception")
         LOG.exception(e)
         user_info['success'] = False
-    except Exception, e:
+    except Exception as e:
         LOG.error("Unexpected Exception Occurred")
         LOG.exception(e)
         user_info['success'] = False
@@ -170,7 +170,7 @@ def ldap_authenticate_default(username, password):
     return user_info
 
 
-def ldap_create_user_default(user_info):
+def ldap_create_user_default(user_info, request):
     """takes the result returned by the :func:`ldap_authenticate`
 
     and returns a :class:`UserAssociation` object
@@ -186,7 +186,7 @@ def ldap_create_user_default(user_info):
     user.is_superuser = False
     user.is_active = True
     user.save()
-    user_registered.send(None, user = user)
+    user_registered.send(None, user=user, request=request)
     LOG.info('Created New User : [{0}]'.format(user_info['ldap_username']))
 
     assoc = UserAssociation()
@@ -198,12 +198,12 @@ def ldap_create_user_default(user_info):
 
 LDAP_AUTH_FUNC_PATH = getattr(django_settings, 'LDAP_AUTHENTICATE_FUNCTION', None)
 if LDAP_AUTH_FUNC_PATH:
-    ldap_authenticate = load_module(LDAP_AUTH_FUNC_PATH)
+    ldap_authenticate = load_function(LDAP_AUTH_FUNC_PATH)
 else:
     ldap_authenticate = ldap_authenticate_default
 
 LDAP_CREATE_FUNC_PATH = getattr(django_settings, 'LDAP_CREATE_USER_FUNCTION', None)
 if LDAP_CREATE_FUNC_PATH:
-    ldap_create_user = load_module(LDAP_CREATE_FUNC_PATH)
+    ldap_create_user = load_function(LDAP_CREATE_FUNC_PATH)
 else:
     ldap_create_user = ldap_create_user_default

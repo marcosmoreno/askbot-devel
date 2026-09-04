@@ -1,22 +1,27 @@
-import os
-import urlparse
-from django.core.urlresolvers import reverse
-from django.conf import settings
-try:
-    from django.conf.urls import url
-except ImportError:
-    from django.conf.urls.defaults import url
+"""utilities to work with the urls"""
+import importlib
+import sys
+import urllib.parse
+from django.urls import reverse, re_path
+from django.conf import settings as django_settings
+from django.urls import clear_url_caches
 from django.utils import translation
+
+def reload_urlconf():
+    """Reloads the urlconf file and clears the url caches"""
+    clear_url_caches()
+    urlconf = django_settings.ROOT_URLCONF
+    if urlconf in sys.modules:
+        importlib.reload(sys.modules[urlconf])
 
 def reverse_i18n(lang, *args, **kwargs):
     """reverses url in requested language"""
-    assert(lang != None)
+    assert lang is not None
     current_lang = translation.get_language()
     translation.activate(lang)
-    url = reverse(*args, **kwargs)
+    i18n_url = reverse(*args, **kwargs)
     translation.activate(current_lang)
-    return url
-
+    return i18n_url
 
 def service_url(*args, **kwargs):
     """adds the service prefix to the url"""
@@ -24,17 +29,17 @@ def service_url(*args, **kwargs):
     if pattern[0] == '^':
         pattern = pattern[1:]
 
-    prefix = settings.ASKBOT_SERVICE_URL_PREFIX
-    pattern = '^' + prefix + pattern
+    prefix = django_settings.ASKBOT_SERVICE_URL_PREFIX
+    pattern = prefix + pattern
     new_args = list(args)
     new_args[0] = pattern
-    return url(*new_args, **kwargs)
+    return re_path(*new_args, **kwargs)
 
-def strip_path(url):
+def strip_path(input_url):
     """srips path, params and hash fragments of the url"""
-    purl = urlparse.urlparse(url)
-    return urlparse.urlunparse(
-        urlparse.ParseResult(
+    purl = urllib.parse.urlparse(input_url)
+    return urllib.parse.urlunparse(
+        urllib.parse.ParseResult(
             purl.scheme,
             purl.netloc,
             '', '', '', ''
@@ -48,14 +53,14 @@ def append_trailing_slash(urlpath):
     """
     if urlpath == '':
         return '/'
-    elif not urlpath.endswith('/'):
+    if not urlpath.endswith('/'):
         return urlpath + '/'
     return urlpath
 
 def urls_equal(url1, url2, ignore_trailing_slash=False):
     """True, if urls are equal"""
-    purl1 = urlparse.urlparse(url1)
-    purl2 = urlparse.urlparse(url2)
+    purl1 = urllib.parse.urlparse(url1)
+    purl2 = urllib.parse.urlparse(url2)
     if purl1.scheme != purl2.scheme:
         return False
 
@@ -78,27 +83,22 @@ def get_login_url():
     django_authopenid is used, or
     the corresponding django setting
     """
-    if 'askbot.deps.django_authopenid' in settings.INSTALLED_APPS:
-        return reverse('user_signin')
-    else:
-        return settings.LOGIN_URL
+    if 'askbot.deps.django_authopenid' in django_settings.INSTALLED_APPS:
+        return getattr(django_settings, 'ASKBOT_LOGIN_URL', reverse('user_signin'))
+    return django_settings.LOGIN_URL
 
 def get_logout_url():
     """returns internal logout url
     if django_authopenid is used or
     the django setting"""
-    if 'askbot.deps.django_authopenid' in settings.INSTALLED_APPS:
+    if 'askbot.deps.django_authopenid' in django_settings.INSTALLED_APPS:
         return reverse('user_signout')
-    else:
-        return settings.LOGOUT_URL
+    return django_settings.LOGOUT_URL
 
 def get_logout_redirect_url():
     """returns internal logout redirect url,
-    or settings.LOGOUT_REDIRECT_URL if it exists
+    or django_settings.LOGOUT_REDIRECT_URL if it exists
     or url to the main page"""
-    if 'askbot.deps.django_authopenid' in settings.INSTALLED_APPS:
-        return reverse('logout')
-    elif hasattr(settings, 'LOGOUT_REDIRECT_URL'):
-        return settings.LOGOUT_REDIRECT_URL
-    else:
-        return reverse('index')
+    if hasattr(django_settings, 'LOGOUT_REDIRECT_URL'):
+        return django_settings.LOGOUT_REDIRECT_URL
+    return reverse('index')

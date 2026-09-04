@@ -5,6 +5,7 @@ both "from" and "to" tags are identified by id
 
 also, corresponding questions are retagged
 """
+
 import re
 import sys
 from django.conf import settings as django_settings
@@ -46,7 +47,7 @@ def get_tag_names(tag_list):
 
 def format_tag_name_list(tag_list):
     name_list = get_tag_names(tag_list)
-    return u', '.join(name_list)
+    return ', '.join(name_list)
 
 class Command(BaseCommand):
     "The command object itself"
@@ -77,6 +78,19 @@ rename_tags, but using tag id's
                             dest='user_id',
                             default=None,
                             help='id of the user who will be marked as a performer of this operation'
+                           )
+        parser.add_argument('--lang',
+                            action='store',
+                            type=str,
+                            dest='lang',
+                            default=django_settings.LANGUAGE_CODE,
+                            help='language code of the tag, e.g. "en"'
+                           )
+        parser.add_argument('--is_force',
+                            action='store_true',
+                            dest='is_force',
+                            default=False,
+                            help='force the issue'
                            )
 
     def handle(self, *args, **options):
@@ -117,18 +131,18 @@ rename_tags, but using tag id's
         #print some feedback here and give a chance to bail out
         question_count = questions.count()
         if question_count == 0:
-            print """Did not find any matching questions,
+            print("""Did not find any matching questions,
 you might want to run prune_unused_tags
-or repost a bug, if that does not help"""
+or repost a bug, if that does not help""")
         elif question_count == 1:
-            print "One question matches:"
+            print("One question matches:")
         elif question_count <= 10:
-            print "%d questions match:" % question_count
+            print("%d questions match:" % question_count)
         if question_count > 10:
-            print "%d questions match." % question_count
-            print "First 10 are:"
+            print("%d questions match." % question_count)
+            print("First 10 are:")
         for question in questions[:10]:
-            print '* %s' % question.title.strip()
+            print('* %s' % question.title.strip())
 
         formatted_from_tag_names = format_tag_name_list(from_tags)
         formatted_to_tag_names = format_tag_name_list(to_tags)
@@ -137,10 +151,10 @@ or repost a bug, if that does not help"""
             prompt = 'Rename tags %s --> %s?' % (formatted_from_tag_names, formatted_to_tag_names)
             choice = console.choice_dialog(prompt, choices=('yes', 'no'))
             if choice == 'no':
-                print 'Canceled'
+                print('Canceled')
                 sys.exit()
         else:
-            print 'Renaming tags %s --> %s' % (formatted_from_tag_names, formatted_to_tag_names)
+            print('Renaming tags %s --> %s' % (formatted_from_tag_names, formatted_to_tag_names))
         sys.stdout.write('Processing:')
 
         from_tag_names = get_tag_names(from_tags)
@@ -153,7 +167,7 @@ or repost a bug, if that does not help"""
                                                 source_tag_name=to_tag_name,
                                                 language_code=lang
                                             )
-               raise CommandError(u'You gave %s as --to argument, but TagSynonym: %s -> %s exists, probably you want to provide %s as --to argument' % (to_tag_name, tag_synonym.source_tag_name, tag_synonym.target_tag_name, tag_synonym.target_tag_name))
+               raise CommandError('You gave %s as --to argument, but TagSynonym: %s -> %s exists, probably you want to provide %s as --to argument' % (to_tag_name, tag_synonym.source_tag_name, tag_synonym.target_tag_name, tag_synonym.target_tag_name))
             except models.TagSynonym.DoesNotExist:
                 pass
 
@@ -168,7 +182,7 @@ or repost a bug, if that does not help"""
 
             admin.retag_question(
                 question = question._question_post(),
-                tags = u' '.join(tag_names),
+                tags = ' '.join(tag_names),
                 #silent = True #do we want to timestamp activity on question
             )
             question.invalidate_cached_summary_html()

@@ -14,6 +14,10 @@ SelectBox.prototype.setItemClass = function (itemClass) {
     this._item_class = itemClass;
 };
 
+SelectBox.prototype.getItemCount = function () {
+  return this._items.length;
+};
+
 SelectBox.prototype.setEditable = function (is_editable) {
     this._is_editable = is_editable;
 };
@@ -175,7 +179,7 @@ SelectBox.prototype.decorate = function (element) {
     this._element = element;
     var me = this;
     var box_items = this._items;
-    var item_elements = this._element.find('.select-box-item');
+    var item_elements = this._element.find('.js-select-box-item');
     item_elements.each(function (idx, item_element) {
         var item = me.createItem();
         item.decorate($(item_element));
@@ -190,5 +194,5 @@ SelectBox.prototype.decorate = function (element) {
 SelectBox.prototype.createDom = function () {
     var element = this.makeElement('ul');
     this._element = element;
-    element.addClass('select-box');
+    element.addClass('js-select-box');
 };

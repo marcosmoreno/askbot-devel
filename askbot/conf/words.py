@@ -2,9 +2,9 @@
 General skin settings
 """
 from askbot.conf.settings_wrapper import settings
-from askbot.deps.livesettings import ConfigurationGroup
-from askbot.deps.livesettings import values
-from django.utils.translation import ugettext_lazy as _
+from livesettings.values import ConfigurationGroup
+from livesettings import values
+from django.utils.translation import gettext_lazy as _
 from askbot.skins import utils as skin_utils
 from askbot import const
 from askbot.conf.super_groups import CONTENT_AND_UI
@@ -91,12 +91,12 @@ settings.register(
 settings.register(
     values.LongStringValue(
         WORDS,
-        'WORDS_INSTRUCTION_TO_GIVE_ANSWERS',
+        'WORDS_INSTRUCTION_TO_GIVE_ANSWER',
         default=_(
             'This space is reserved only for answers. '
             'If you would like to engage in a discussion, '
             'please instead post a comment under the question or '
-            'an answer that you would like to discuss'
+            'an answer that you would like to discuss.'
         ),
         description=_('Instruction to give answers'),
         help_text=_('HTML is allowed'),
@@ -130,7 +130,7 @@ settings.register(
 )
 
 #action definition (action def)
-#this phrase is used as a parameter within 
+#this phrase is used as a parameter within
 #another phrase like "sorry, you cannot ask questions"
 #hopefully it works, because it is used in indefinite form
 #other similarly used phrases are marked as "action def" below
@@ -473,7 +473,7 @@ settings.register(
     values.StringValue(
         WORDS,
         'WORDS_SHOW_ONLY_QUESTIONS_FROM',
-        default=_('Show only questions from'),
+        default=_('Show questions from'),
         description=_('Show only questions from'),
         localized=True
     )
@@ -523,8 +523,8 @@ settings.register(
     values.StringValue(
         WORDS,
         'WORDS_ONLY_ONE_ANSWER_PER_USER_IS_ALLOWED',
-        default=_('(only one answer per user is allowed)'),
-        description=_('Only one answer per user is allowed'),
+        default=_('You already gave an answer and only one answer per user is allowed.'),
+        description=_('You already gave an answer and only one answer per user is allowed.'),
         localized=True
     )
 )
@@ -704,8 +704,8 @@ settings.register(
     values.StringValue(
         WORDS,
         'WORDS_COMMUNITY_GIVES_YOU_AWARDS',
-        default=_('Community gives you awards for your questions, answers and votes'),
-        description=_('Community gives you awards for your questions, answers and votes'),
+        default=_('Community gives you awards for your questions, answers and votes.'),
+        description=_('Community gives you awards for your questions, answers and votes.'),
         localized=True
     )
 )

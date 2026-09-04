@@ -5,7 +5,7 @@ from collections import namedtuple
 import django.dispatch
 
 from django.db.models.signals import (pre_save, post_save,
-                                      pre_delete, post_delete, post_syncdb)
+                                      pre_delete, post_delete, post_migrate)
 
 try:
     from django.db.models.signals import m2m_changed
@@ -17,45 +17,37 @@ GenericSignal = namedtuple(
     'GenericSignal', field_names=['signal', 'callback', 'dispatch_uid'])
 
 
-tags_updated = django.dispatch.Signal(
-    providing_args=['tags', 'user', 'timestamp'])
+tags_updated = django.dispatch.Signal()
 
-after_post_removed = django.dispatch.Signal(
-    providing_args=['instance', 'deleted_by'])
+after_post_removed = django.dispatch.Signal()
 
-after_post_restored = django.dispatch.Signal(
-    providing_args=['instance', 'restored_by'])
+after_post_restored = django.dispatch.Signal()
 
-flag_offensive = django.dispatch.Signal(providing_args=['instance', 'mark_by'])
-remove_flag_offensive = django.dispatch.Signal(providing_args=['instance', 'mark_by'])
-user_updated = django.dispatch.Signal(providing_args=['instance', 'updated_by'])
-user_registered = django.dispatch.Signal(providing_args=['user'])
-
+flag_offensive = django.dispatch.Signal()
+remove_flag_offensive = django.dispatch.Signal()
+user_updated = django.dispatch.Signal()
 # TODO: move this to authentication app
-user_logged_in = django.dispatch.Signal(providing_args=['session'])
+user_registered = django.dispatch.Signal()
+user_logged_in = django.dispatch.Signal()
 
-new_answer_posted = django.dispatch.Signal(
-    providing_args=['answer', 'user', 'form_data'])
-new_question_posted = django.dispatch.Signal(
-    providing_args=['question', 'user', 'form_data'])
-new_comment_posted = django.dispatch.Signal(
-    providing_args=['comment', 'user', 'form_data'])
-answer_edited = django.dispatch.Signal(
-    providing_args=['answer', 'user', 'form_data'])
-question_visited = django.dispatch.Signal(
-    providing_args=['request', 'question'])
+new_answer_posted = django.dispatch.Signal()
+new_question_posted = django.dispatch.Signal()
+new_comment_posted = django.dispatch.Signal()
+answer_edited = django.dispatch.Signal()
+question_visited = django.dispatch.Signal()
+voted = django.dispatch.Signal()
+best_answer_accepted = django.dispatch.Signal()
+best_answer_unaccepted = django.dispatch.Signal()
 
-post_updated = django.dispatch.Signal(
-    providing_args=['post', 'updated_by', 'newly_mentioned_users'])
+post_updated = django.dispatch.Signal()
 
-post_revision_published = django.dispatch.Signal(
-    providing_args = ['revision', 'was_approved' ])
+post_revision_published = django.dispatch.Signal()
 
-spam_rejected = django.dispatch.Signal(
-    providing_args = ['text', 'spam', 'user', 'ip_addr' ])
+spam_rejected = django.dispatch.Signal()
 
-site_visited = django.dispatch.Signal(providing_args=['user', 'timestamp'])
-reputation_received = django.dispatch.Signal(providing_args=['user', 'reputation_before'])
+site_visited = django.dispatch.Signal()
+reputation_received = django.dispatch.Signal()
+posts_marked_as_spam = django.dispatch.Signal()
 
 
 def pop_signal_receivers(signal):
@@ -95,13 +87,15 @@ def pop_all_db_signal_receivers():
         user_registered,
         post_updated,
         award_badges_signal,
+        posts_marked_as_spam,
+        question_visited,
+        voted,
         # django signals
         pre_save,
         post_save,
         pre_delete,
         post_delete,
-        post_syncdb,
-        question_visited,
+        post_migrate,
     )
     if 'm2m_changed' in globals():
         signals += (m2m_changed, )
@@ -127,5 +121,5 @@ def set_all_db_signal_receivers(receiver_data):
     pop_all_db_signal_receivers() call
     and sets the receivers back to the signals
     """
-    for (signal, receivers) in receiver_data.items():
+    for (signal, receivers) in list(receiver_data.items()):
         signal.receivers = receivers

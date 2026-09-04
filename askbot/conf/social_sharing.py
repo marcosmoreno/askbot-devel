@@ -1,10 +1,10 @@
 """
 Social sharing settings
 """
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from askbot.conf.settings_wrapper import settings
 from askbot.conf.super_groups import EXTERNAL_SERVICES
-from askbot.deps.livesettings import ConfigurationGroup, BooleanValue, \
+from livesettings.values import ConfigurationGroup, BooleanValue, \
     StringValue
 
 SOCIAL_SHARING = ConfigurationGroup(
@@ -60,23 +60,5 @@ settings.register(
         'ENABLE_SHARING_LINKEDIN',
         default=True,
         description=_('Check to enable sharing of questions on LinkedIn')
-    )
-)
-
-settings.register(
-    BooleanValue(
-        SOCIAL_SHARING,
-        'ENABLE_SHARING_IDENTICA',
-        default=True,
-        description=_('Check to enable sharing of questions on Identi.ca')
-    )
-)
-
-settings.register(
-    BooleanValue(
-        SOCIAL_SHARING,
-        'ENABLE_SHARING_GOOGLE',
-        default=True,
-        description=_('Check to enable sharing of questions on Google+')
     )
 )

@@ -3,15 +3,16 @@ This command is incomplete, current awards only
 Civic Duty badge
 """
 
+
 from askbot.models import badges
 from askbot.models import User
 from askbot.models import Vote
 from askbot.utils.console import ProgressBar
-from django.core.management.base import NoArgsCommand
+from django.core.management import BaseCommand
 from django.utils import timezone
 
-class Command(NoArgsCommand):
-    def handle_noargs(self, *args, **kwargs):
+class Command(BaseCommand):
+    def handle(self, *args, **kwargs):
         now = timezone.now()
         awarded_count = 0
 
@@ -34,4 +35,4 @@ class Command(NoArgsCommand):
                         )
                 awarded_count += int(awarded)
 
-        print 'Awarded %d badges' % awarded_count
+        print('Awarded %d badges' % awarded_count)

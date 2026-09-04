@@ -9,8 +9,11 @@ exactly match name of the model used in the project
 """
 from django.contrib import admin
 from django.contrib.admin import SimpleListFilter
-from django.utils.translation import ugettext as _
+from django.contrib.auth.admin import UserAdmin
+from django.utils.translation import gettext as _
 from askbot import models
+from askbot.const import TAG_EMAIL_FILTER_FULL_STRATEGY_CHOICES
+from askbot.models.user_profile import USER_PROFILE_PROPERTIES
 
 
 class PostAdmin(admin.ModelAdmin):
@@ -261,10 +264,40 @@ class IsPersonal(SimpleListFilter):
 
 
 class GroupAdmin(admin.ModelAdmin):
-    list_display = ('id', 'name', 'logo_url', 'description', 'moderate_email', 'moderate_answers_to_enquirers', 'openness', 'is_vip', 'read_only')
+    list_display = ('id', 'name', 'logo_url', 'description', 'moderate_email', 'openness', 'read_only')
     list_display_links = ('id', 'name')
-    list_filter = (IsPersonal, 'moderate_email', 'moderate_answers_to_enquirers', 'openness', 'is_vip', 'read_only')
+    list_filter = (IsPersonal, 'moderate_email', 'openness', 'read_only')
     search_fields = ('name', 'logo_url')
+
+
+class EmailFeedSettingAdmin(admin.ModelAdmin):
+    search_fields = ('subscriber__username', )
+
+
+def profile_owner(obj):
+    try:
+        user = models.User.objects.filter(askbot_profile=obj)[0]
+        return f'{user.username} ({user.email})'
+    except Exception: #pylint: disable=broad-except
+        return 'Unknown'
+
+
+class UserProfileAdmin(admin.ModelAdmin):
+    model = models.user_profile.UserProfile
+    search_fields = ('auth_user_ptr__username', 'auth_user_ptr__email')
+    list_display = (profile_owner, 'email_is_confidential')
+    list_filter = ('email_is_confidential', 'status')
+    fieldsets = (
+        (None, {
+            'fields': (
+                ('email_is_confidential'),
+                ('email_isvalid'),
+                ('status',),
+                ('is_fake',),
+                ('last_seen'),
+            )
+        }),
+    )
 
 
 admin.site.register(models.BadgeData, BadgeDataAdmin)
@@ -282,3 +315,20 @@ admin.site.register(models.Thread, ThreadAdmin)
 admin.site.register(models.question.ThreadToGroup, ThreadToGroupAdmin)
 admin.site.register(models.QuestionView, QuestionViewAdmin)
 admin.site.register(models.ReplyAddress, ReplyAddressAdmin)
+admin.site.register(models.EmailFeedSetting, EmailFeedSettingAdmin)
+admin.site.register(models.user_profile.UserProfile, UserProfileAdmin)
+
+
+class MarkedTagInlineAdmin(admin.TabularInline):
+    model = models.MarkedTag
+
+UserAdmin.readonly_fields = USER_PROFILE_PROPERTIES
+UserAdmin.fieldsets = UserAdmin.fieldsets + (('User Profile', {'fields': tuple(USER_PROFILE_PROPERTIES)}), )
+UserAdmin.inlines = [MarkedTagInlineAdmin]
+
+
+def user_admin_email_tag_filter_strategy(self, instance):
+    return dict(TAG_EMAIL_FILTER_FULL_STRATEGY_CHOICES)[instance.email_tag_filter_strategy]
+
+
+UserAdmin.email_tag_filter_strategy = user_admin_email_tag_filter_strategy

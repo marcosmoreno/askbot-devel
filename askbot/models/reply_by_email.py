@@ -4,7 +4,7 @@ import logging
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils import timezone
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
 from askbot.models.post import Post
 from askbot.models.base import BaseQuerySetManager
 from askbot.conf import settings as askbot_settings
@@ -39,8 +39,8 @@ class ReplyAddressManager(BaseQuerySetManager):
         kwargs['allowed_from_email'] = kwargs['user'].email
         reply_address = ReplyAddress(**kwargs)
         while True:
-            reply_address.address = ''.join(random.choice(string.letters +
-                string.digits) for i in xrange(random.randint(12, 25))).lower()
+            reply_address.address = ''.join(random.choice(string.ascii_letters +
+                string.digits) for i in range(random.randint(12, 25))).lower()
             if self.filter(address=reply_address.address).count() == 0:
                 break
         reply_address.save()
@@ -62,12 +62,12 @@ class ReplyAddress(models.Model):
     and the user"""
     address = models.CharField(max_length=25, unique=True)
     # the emailed post
-    post = models.ForeignKey(Post, null=True, related_name='reply_addresses')
+    post = models.ForeignKey(Post, null=True, related_name='reply_addresses', on_delete=models.CASCADE)
     reply_action = models.CharField(max_length=32, choices=REPLY_ACTION_CHOICES,
                                     default='auto_answer_or_comment')
-    response_post = models.ForeignKey(Post, null=True,
+    response_post = models.ForeignKey(Post, null=True, on_delete=models.CASCADE,
                                       related_name='edit_addresses')
-    user = models.ForeignKey(User)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
     allowed_from_email = models.EmailField(max_length=150)
     used_at = models.DateTimeField(null=True, default=None)
 

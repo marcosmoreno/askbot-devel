@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from askbot.deps.django_authopenid import mimeparse
 from django.http import HttpResponseRedirect
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 import logging
 
 __all__ = ["OpenIDMiddleware"]
@@ -19,7 +19,7 @@ class OpenIDMiddleware(object):
         if response.status_code != 200 or len(response.content) < 200:
             return response
         path = request.get_full_path()
-        if path == "/" and request.META.has_key('HTTP_ACCEPT') and \
+        if path == "/" and 'HTTP_ACCEPT' in request.META and \
                 mimeparse.best_match(['text/html', 'application/xrds+xml'],
                     request.META['HTTP_ACCEPT']) == 'application/xrds+xml':
             logging.debug('redirecting to yadis_xrdf:%s' % reverse('yadis_xrdf'))

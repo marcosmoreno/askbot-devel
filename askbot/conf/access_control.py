@@ -1,11 +1,9 @@
-from django.utils.translation import ugettext_lazy as _
-from django.utils.translation import string_concat
+from django.utils.translation import gettext_lazy as _
+from django.utils.text import format_lazy
 
 from askbot.conf.settings_wrapper import settings
 from askbot.conf.super_groups import LOGIN_USERS_COMMUNICATION
-from askbot.deps import livesettings
-from askbot.deps.livesettings import BooleanValue
-from askbot.deps.livesettings import StringValue
+from livesettings import values as livesettings
 
 ACCESS_CONTROL = livesettings.ConfigurationGroup(
                     'ACCESS_CONTROL',
@@ -14,7 +12,7 @@ ACCESS_CONTROL = livesettings.ConfigurationGroup(
                 )
 
 settings.register(
-    BooleanValue(
+    livesettings.BooleanValue(
         ACCESS_CONTROL,
         'READ_ONLY_MODE_ENABLED',
         default=False,
@@ -23,7 +21,7 @@ settings.register(
 )
 
 settings.register(
-    StringValue(
+    livesettings.StringValue(
         ACCESS_CONTROL,
         'READ_ONLY_MESSAGE',
         default=_(
@@ -62,31 +60,22 @@ settings.register(
     )
 )
 
-EMAIL_VALIDATION_CASE_CHOICES = (
-    ('nothing', _('nothing - not required')),
-    ('see-content', _('account registration')),
-    # ('post-content', _('posting content')),
-)
-
 settings.register(
-    livesettings.StringValue(
+    livesettings.BooleanValue(
         ACCESS_CONTROL,
-        'REQUIRE_VALID_EMAIL_FOR',
-        default='nothing',
-        choices=EMAIL_VALIDATION_CASE_CHOICES,
-        description=_('Require valid email for')
+        'EMAIL_VALIDATION_REQUIRED',
+        default=True,
+        description=_('Require a valid email address'),
+        help_text=_(
+            'When enabled, users must verify their email address '
+            'at registration or when changing their email address. '
+            'To verify it, the users must click an emailed confirmation link '
+            'from their inbox. '
+            'Disable only on trusted installations where email '
+            'ownership is guaranteed by other means.'
+        )
     )
 )
-
-# TODO: move REQUIRE_VALID_EMAIL_FOR to boolean setting
-# settings.register(
-#     livesettings.BooleanValue(
-#         ACCESS_CONTROL,
-#         'EMAIL_VALIDATION_REQUIRED',
-#         default=False,
-#         description=_('Require valid email address to register')
-#     )
-# )
 
 
 def update_email_callback(old, new):
@@ -100,9 +89,8 @@ settings.register(
         'ALLOWED_EMAILS',
         default='',
         description=_('Allowed email addresses'),
-        help_text=string_concat(
+        help_text=format_lazy('{}. {}',
             _('Please use space to separate the entries'),
-            '. ',
             _('Entry disables blacklisted email patterns')
         ),
         update_callback=update_email_callback
@@ -115,9 +103,8 @@ settings.register(
         'ALLOWED_EMAIL_DOMAINS',
         default='',
         description=_('Allowed email domain names'),
-        help_text=string_concat(
+        help_text=format_lazy('{}. {}',
             _('Please use space to separate the entries, do not use the @ symbol!'),
-            '. ',
             _('Entry disables blacklisted email patterns')
         ),
         update_callback=update_email_callback
@@ -126,8 +113,8 @@ settings.register(
 
 BLACKLISTED_EMAIL_PATTERNS_MODE_CHOICES = (
     ('disabled', _('disable')),
-    ('medium', string_concat(_('block user registrations'),
-                             ', ',
+    ('medium', format_lazy('{}, {}',
+                             _('block user registrations'),
                              _('allow existing users to post'))),
     ('strict', _('block completely')),
 )
@@ -148,11 +135,9 @@ settings.register(
         'BLACKLISTED_EMAIL_PATTERNS',
         default='',
         description=_('Blacklisted email address patterns'),
-        help_text=string_concat(
+        help_text=format_lazy('{}, {}.',
             _('Please use space to separate the entries'),
-            ', ',
-            _('regular expressions are allowed'),
-            '.'
+            _('regular expressions are allowed')
         )
     )
 )

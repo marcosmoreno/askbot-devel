@@ -11,11 +11,15 @@ from unidecode import unidecode
 
 from django.conf import settings
 from django.template import defaultfilters
-from django.utils.encoding import smart_unicode
+from django.utils.encoding import smart_str
 
 
 # Extra characters outside of alphanumerics that we'll allow.
 SLUG_OK = '-_~'
+
+def ascii_slugify(input_text):
+    """Returns ascii slug of input text"""
+    return defaultfilters.slugify(unidecode(input_text))
 
 def slugify_camelcase(camel):
     """Converts CamelCase to camel-case"""
@@ -36,7 +40,7 @@ def unicode_slugify(s, ok=SLUG_OK, lower=True, spaces=False):
     http://www.unicode.org/reports/tr44/tr44-4.html#GC_Values_Table
     """
     rv = []
-    for c in unicodedata.normalize('NFKC', smart_unicode(s)):
+    for c in unicodedata.normalize('NFKC', smart_str(s)):
         cat = unicodedata.category(c)[0]
         if cat in 'LN' or c in ok:
             rv.append(c)
@@ -56,10 +60,10 @@ def slugify(input_text, max_length=150):
         return input_text
 
     allow_unicode_slugs = getattr(settings, 'ALLOW_UNICODE_SLUGS', False)
-    if isinstance(input_text, unicode) and not allow_unicode_slugs:
+    if isinstance(input_text, str) and not allow_unicode_slugs:
         input_text = unidecode(input_text)
 
-    if isinstance(input_text, unicode):
+    if isinstance(input_text, str):
         slug = unicode_slugify(input_text)
     else:
         slug = defaultfilters.slugify(input_text)

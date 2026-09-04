@@ -35,7 +35,7 @@ to the language prefix of the url.
 
 For either of multilingual modes, specify the list of
 the enabled languages::
-    from django.utils.translation import ugettext_lazy as _
+    from django.utils.translation import gettext_lazy as _
     LANGUAGES = (
         ('de', _('German')),
         ('en', _('English'))
@@ -64,7 +64,7 @@ This section will help users who disable the Askbot self-tests and
 when the mode is `'url-lang'` or `'user-lang'`.
 
 Activate the django's locale middleware by adding to the 
-`MIDDLEWARE_CLASSES` the following entry::
+`MIDDLEWARE` the following entry::
     'django.middleware.locale.LocaleMiddleware',
 
 Add the following to the `settings.py`::

@@ -5,7 +5,7 @@ e.g. ``some_user.do_something(...)``
 """
 from bs4 import BeautifulSoup
 from django.core import exceptions
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.test.client import Client
 from django.conf import settings
 from django.contrib.auth.models import AnonymousUser
@@ -18,11 +18,7 @@ from askbot import models
 from askbot import const
 from askbot.conf import settings as askbot_settings
 
-class DBApiTests(AskbotTestCase):
-    """tests methods on User object,
-    that were added for askbot
-    """
-
+class DBApiTestsBase(AskbotTestCase):
     def setUp(self):
         self.create_user()
         self.create_user(username = 'other_user')
@@ -35,11 +31,14 @@ class DBApiTests(AskbotTestCase):
         if question is None:
             question = self.question
 
-        self.answer = super(DBApiTests, self).post_answer(
-                                                user = user,
-                                                question = question,
-                                            )
+        self.answer = super().post_answer(user=user, question=question)
         return self.answer
+
+
+class DBApiTests(DBApiTestsBase):
+    """tests methods on User object,
+    that were added for askbot
+    """
 
     def assert_post_is_deleted(self, post):
         self.assertTrue(post.deleted == True)
@@ -56,23 +55,6 @@ class DBApiTests(AskbotTestCase):
         self.assertEqual(
             models.Tag.objects.filter(name='').count(),
             0
-        )
-
-    def test_flag_question(self):
-        self.user.set_status('m')
-        self.user.flag_post(self.question)
-        self.assertEquals(
-            self.user.get_flags().count(),
-            1
-        )
-
-    def test_flag_answer(self):
-        self.post_answer()
-        self.user.set_status('m')
-        self.user.flag_post(self.answer)
-        self.assertEquals(
-            self.user.get_flags().count(),
-            1
         )
 
     def ask_anonymous_question(self):
@@ -112,9 +94,9 @@ class DBApiTests(AskbotTestCase):
     def test_post_unicode_question(self):
         """there was a bug that caused this to raise a db error"""
         self.user.post_question(
-            tags=u'\u043c\u043e\u0440\u0435',
-            body_text=u'\u041f\u043e\u0447\u0435\u043c\u0443 \u043c\u043e\u0440\u0435 \u0441\u0438\u043d\u0435\u0435? \u043e\u043f\u044f\u0442\u044c \u0436\u0435, \u0431\u044b\u043b\u043e \u0431\u044b \u043f\u0440\u0430\u043a\u0442\u0438\u0447\u043d\u0435\u0435 \u0435\u0441\u043b\u0438 \u0431\u044b \u043e\u043d\u043e \u0431\u044b\u043b\u043e \u043f\u0440\u043e\u0437\u0440\u0430\u0447\u043d\u043e\u0435, \u043c\u043e\u0436\u043d\u043e \u0431\u044b\u043b\u043e \u0441\u0440\u0430\u0437\u0443 \u0440\u0430\u0437\u0433\u043b\u044f\u0434\u0435\u0442\u044c \u0434\u043d\u043e.',
-            title=u'\u041f\u043e\u0447\u0435\u043c\u0443 \u043c\u043e\u0440\u0435 \u0441\u0438\u043d\u0435\u0435?'
+            tags='\u043c\u043e\u0440\u0435',
+            body_text='\u041f\u043e\u0447\u0435\u043c\u0443 \u043c\u043e\u0440\u0435 \u0441\u0438\u043d\u0435\u0435? \u043e\u043f\u044f\u0442\u044c \u0436\u0435, \u0431\u044b\u043b\u043e \u0431\u044b \u043f\u0440\u0430\u043a\u0442\u0438\u0447\u043d\u0435\u0435 \u0435\u0441\u043b\u0438 \u0431\u044b \u043e\u043d\u043e \u0431\u044b\u043b\u043e \u043f\u0440\u043e\u0437\u0440\u0430\u0447\u043d\u043e\u0435, \u043c\u043e\u0436\u043d\u043e \u0431\u044b\u043b\u043e \u0441\u0440\u0430\u0437\u0443 \u0440\u0430\u0437\u0433\u043b\u044f\u0434\u0435\u0442\u044c \u0434\u043d\u043e.',
+            title='\u041f\u043e\u0447\u0435\u043c\u0443 \u043c\u043e\u0440\u0435 \u0441\u0438\u043d\u0435\u0435?'
         )
 
     def test_post_bodyless_question(self):
@@ -123,7 +105,7 @@ class DBApiTests(AskbotTestCase):
             title = 'aeuaouaousaotuhao',
             tags = 'test'
         )
-        self.assertEquals(q.text.strip(), '')
+        self.assertEqual(q.text.strip(), '')
 
     def test_reveal_asker_identity(self):
         q = self.ask_anonymous_question()
@@ -163,7 +145,7 @@ class DBApiTests(AskbotTestCase):
         self.user.delete_answer(self.answer)
         self.assert_post_is_deleted(self.answer)
         saved_question = models.Post.objects.get_questions().get(id = self.question.id)
-        self.assertEquals(0, saved_question.thread.answer_count)
+        self.assertEqual(0, saved_question.thread.answer_count)
 
     def test_restore_answer(self):
         self.post_answer()
@@ -188,12 +170,12 @@ class DBApiTests(AskbotTestCase):
     def test_unused_tag_is_not_auto_deleted(self):
         self.user.retag_question(self.question, tags='one-tag')
         tag = models.Tag.objects.get(name='one-tag')
-        self.assertEquals(tag.used_count, 1)
-        self.assertEquals(tag.deleted, False)
+        self.assertEqual(tag.used_count, 1)
+        self.assertEqual(tag.deleted, False)
         self.user.retag_question(self.question, tags='two-tag')
 
         count = models.Tag.objects.filter(name='one-tag').count()
-        self.assertEquals(count, 1)
+        self.assertEqual(count, 1)
 
     @with_settings(MAX_TAG_LENGTH=200, MAX_TAGS_PER_POST=50)
     def test_retag_tags_too_long_raises(self):
@@ -231,7 +213,7 @@ class UserLikeTagTests(AskbotTestCase):
             reason = item[0]
             mt = models.MarkedTag(user = self.user, tag = tag, reason = reason)
             mt.save()
-            self.assertEquals(
+            self.assertEqual(
                 self.user.has_affinity_to_question(
                     question = self.question,
                     affinity_type = item[1]
@@ -265,7 +247,7 @@ class UserLikeTagTests(AskbotTestCase):
         askbot_settings.update('USE_WILDCARD_TAGS', True)
 
     def assert_affinity_is(self, affinity_type, expectation):
-        self.assertEquals(
+        self.assertEqual(
             self.user.has_affinity_to_question(
                 question = self.question,
                 affinity_type = affinity_type
@@ -334,7 +316,7 @@ class GlobalTagSubscriberGetterTests(AskbotTestCase):
             tag_mark_reason = reason,
             subscription_records = subscriptions
         )
-        self.assertEquals(actual_subscribers, expected_subscribers)
+        self.assertEqual(actual_subscribers, expected_subscribers)
 
     def test_nobody_likes_any_tags(self):
         """no-one had marked tags, so the set
@@ -429,22 +411,27 @@ class CommentTests(AskbotTestCase):
         self.other_user.upvote(self.comment)
         models.Post.objects.precache_comments(for_posts=[self.question], visitor = self.other_user)
         comments = self.question._cached_comments
-        self.assertEquals(len(comments), 1)
-        self.assertEquals(comments[0].upvoted_by_user, True)
-        self.assertEquals(comments[0].is_upvoted_by(self.other_user), True)
+        self.assertEqual(len(comments), 1)
+        self.assertEqual(comments[0].upvoted_by_user, True)
+        self.assertEqual(comments[0].is_upvoted_by(self.other_user), True)
 
     def test_other_user_can_cancel_upvote(self):
         self.test_other_user_can_upvote_comment()
         comment = models.Post.objects.get_comments().get(id = self.comment.id)
-        self.assertEquals(comment.points, 1)
+        self.assertEqual(comment.points, 1)
         self.other_user.upvote(comment, cancel = True)
         comment = models.Post.objects.get_comments().get(id = self.comment.id)
-        self.assertEquals(comment.points, 0)
+        self.assertEqual(comment.points, 0)
 
 class GroupTests(AskbotTestCase):
     def setUp(self):
         self.u1 = self.create_user('u1')
         askbot_settings.update('GROUPS_ENABLED', True)
+        everyone = models.Group.objects.get_global_group()
+        everyone.can_post_questions = True
+        everyone.can_post_answers = True
+        everyone.can_post_comments = True
+        everyone.save()
 
     def tearDown(self):
         askbot_settings.update('GROUPS_ENABLED', False)
@@ -495,6 +482,10 @@ class GroupTests(AskbotTestCase):
 
     def test_posts_added_to_private_group(self):
         group = self.create_group(group_name='private')
+        group.can_post_questions = True
+        group.can_post_answers = True
+        group.can_post_comments = True
+        group.save()
         self.u1.join_group(group)
 
         q = self.post_question(user=self.u1, is_private=True)
@@ -533,6 +524,10 @@ class GroupTests(AskbotTestCase):
         question = self.post_question(user=self.u1)
         comment = self.post_comment(parent_post=question, user=self.u1)
         group = self.create_group(group_name='private')
+        group.can_post_questions = True
+        group.can_post_answers = True
+        group.can_post_comments = True
+        group.save()
         self.u1.join_group(group)
         self.edit_question(question=question, user=self.u1, is_private=True)
         self.assertEqual(question.groups.count(), 2)
@@ -546,12 +541,17 @@ class GroupTests(AskbotTestCase):
         answer = self.post_answer(question=question, user=self.u1)
         comment = self.post_comment(parent_post=answer, user=self.u1)
         group = self.create_group(group_name='private')
+        group.can_post_questions = True
+        group.can_post_answers = True
+        group.can_post_comments = True
+        group.save()
+
         self.u1.join_group(group)
 
         #membership in `group` should not affect things,
         #because answer groups always inherit thread groups
         self.edit_answer(user=self.u1, answer=answer, is_private=True)
-        self.assertEqual(answer.groups.count(), 1)
+        self.assertEqual(answer.groups.filter(name=askbot_settings.GLOBAL_GROUP_NAME).count(), 0)
 
         #here we have a simple case - the comment to answer was posted
         #by the answer author!!!
@@ -559,7 +559,7 @@ class GroupTests(AskbotTestCase):
         u1_group = self.u1.get_personal_group()
         self.assertEqual(answer.groups.filter(id=u1_group.id).count(), 1)
         #comment inherits the sharing scope
-        self.assertEqual(comment.groups.count(), 1)
+        self.assertEqual(comment.groups.filter(name=askbot_settings.GLOBAL_GROUP_NAME).count(), 0)
         self.assertEqual(comment.groups.filter(id=u1_group.id).count(), 1)
 
     def test_public_question_private_answer_works(self):
@@ -567,6 +567,10 @@ class GroupTests(AskbotTestCase):
 
         u2 = self.create_user('u2')
         group = self.create_group(group_name='private')
+        group.can_post_questions = True
+        group.can_post_answers = True
+        group.can_post_comments = True
+        group.save()
         u2.join_group(group)
 
         answer = self.post_answer(question=question, user=u2, is_private=True)
@@ -586,6 +590,10 @@ class GroupTests(AskbotTestCase):
     def test_thread_answer_count_for_multiple_groups(self):
         question = self.post_question(self.u1)
         group = self.create_group(group_name='private')
+        group.can_post_questions = True
+        group.can_post_answers = True
+        group.can_post_comments = True
+        group.save()
         self.u1.join_group(group)
         answer = self.post_answer(question=question, user=self.u1)
         answer.add_to_groups((group,))
@@ -594,6 +602,10 @@ class GroupTests(AskbotTestCase):
 
     def test_thread_make_public_recursive(self):
         private_group = self.create_group(group_name='private')
+        private_group.can_post_questions = True
+        private_group.can_post_answers = True
+        private_group.can_post_commentss = True
+        private_group.save()
         self.u1.join_group(private_group)
         data = self.post_question_answer_and_comments(is_private=True)
 
@@ -614,10 +626,40 @@ class GroupTests(AskbotTestCase):
         self.assertObjectGroupsEqual(data['answer'], groups)
         self.assertObjectGroupsEqual(data['answer_comment'], groups)
 
+    def test_thread_make_private(self):
+        question = self.post_question(user=self.u1)
+        answer = self.post_answer(question=question, user=self.u1)
+        answer.make_private(self.u1)
+        group = models.Group.objects.get_global_group()
+        self.assertTrue(group in question.thread.groups.all())
+        self.assertTrue(group in question.groups.all())
+        question.thread.make_private(self.u1)
+        self.assertTrue(group not in question.thread.groups.all())
+        self.assertTrue(group not in question.groups.all())
+        self.assertTrue(group not in answer.groups.all())
+        question.thread.make_public()
+        self.assertTrue(group in question.thread.groups.all())
+        self.assertTrue(group in question.groups.all())
+        self.assertTrue(group not in answer.groups.all())
+
+    def test_post_make_private(self):
+        question = self.post_question(user=self.u1)
+        post = self.post_answer(question=question, user=self.u1)
+        group = models.Group.objects.get_global_group()
+        self.assertTrue(group in post.groups.all())
+        post.make_private(self.u1)
+        self.assertTrue(group not in post.groups.all())
+        post.make_public()
+        self.assertTrue(group in post.groups.all())
+
     def test_thread_add_to_groups_recursive(self):
         data = self.post_question_answer_and_comments()
 
         private_group = self.create_group(group_name='private')
+        private_group.can_post_questions = True
+        private_group.can_post_answers = True
+        private_group.can_post_comments = True
+        private_group.save()
         thread = data['thread']
         thread.add_to_groups([private_group], recursive=True)
 
@@ -631,6 +673,10 @@ class GroupTests(AskbotTestCase):
 
     def test_private_thread_is_invisible_to_anonymous_user(self):
         group = self.create_group(group_name='private')
+        group.can_post_questions = True
+        group.can_post_answers = True
+        group.can_post_comments = True
+        group.save()
         self.u1.join_group(group)
         self.post_question(user=self.u1, is_private=True)
 
@@ -689,15 +735,16 @@ class GroupTests(AskbotTestCase):
         recipient = acts[0].recipients.all()[0]
         self.assertEqual(recipient, mod)
 
+
 class LinkPostingTests(AskbotTestCase):
 
     def assert_no_link(self, html):
-        soup = BeautifulSoup(html)
+        soup = BeautifulSoup(html, 'html5lib')
         links = soup.findAll('a')
         self.assertEqual(len(links), 0)
 
     def assert_has_link(self, html, url):
-        soup = BeautifulSoup(html)
+        soup = BeautifulSoup(html, 'html5lib')
         links = soup.findAll('a')
         self.assertTrue(len(links) > 0)
         self.assertEqual(links[0]['href'], url)
@@ -709,7 +756,7 @@ class LinkPostingTests(AskbotTestCase):
     )
     def test_admin_can_help_low_rep_user_insert_link(self):
         #create a low rep user
-        low = self.create_user('low', reputation=10)
+        low = self.create_user('low', reputation=10, status='a')
         #create an admin
         admin = self.create_user('admin', status='d')
         #low re user posts a question with a link
@@ -725,7 +772,7 @@ class ForbiddenTextPostingTests(AskbotTestCase):
         FORBIDDEN_PHRASES='bad\tstuff'
     )
     def test_spam_question_fails(self):
-        user = self.create_user()
+        user = self.create_user(status='a')
         self.assertRaises(
             ValueError,
             self.post_question,

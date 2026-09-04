@@ -4,8 +4,15 @@ All constants could be used in other modules
 For reasons that models, views can't have unicode
 text in this project, all unicode text go here.
 """
-from django.utils.translation import ugettext_lazy as _
+import os
 import re
+from django.utils.translation import gettext_lazy as _
+from askbot import get_install_directory
+#an exception import * because that file has only strings
+from askbot.const.message_keys import * #pylint: disable=wildcard-import
+
+DEFAULT_USER_DATA_EXPORT_DIR = os.path.abspath(
+    os.path.join(get_install_directory(), '..', 'user_data'))
 
 #todo: customize words
 CLOSE_REASONS = (
@@ -18,10 +25,18 @@ CLOSE_REASONS = (
     (7, _('question contains offensive or malicious remarks')),
     (8, _('spam or advertising')),
     (9, _('too localized')),
+    (10, _('question is considered as answered')),
+    (11, _('closed as inactive'))
 )
 
 LONG_TIME = 60*60*24*30 #30 days is a lot of time
 DATETIME_FORMAT = '%I:%M %p, %d %b %Y'
+
+# --- Rate limiting policy windows ---
+# Fixed by policy; operators tune the max counts via livesettings.
+REQUEST_RATE_LIMIT_WINDOW_SECONDS = 60           # 1 minute
+REGISTRATION_RATE_LIMIT_WINDOW_SECONDS = 86400   # 1 day
+WATCHED_USER_POST_RATE_LIMIT_WINDOW_SECONDS = 3600  # 1 hour
 
 SHARE_NOTHING = 0
 SHARE_MY_POSTS = 1
@@ -108,7 +123,7 @@ REPLY_SEPARATOR_TEMPLATE = '==== %(user_action)s %(instruction)s -=-=='
 REPLY_SEPARATOR_REGEX = re.compile(r'==== .* -=-==', re.MULTILINE|re.DOTALL)
 
 ANSWER_SORT_METHODS = (
-    ('latest' , _('latest first')),
+    ('latest', _('latest first')),
     ('oldest', _('oldest first')),
     ('votes', _('most voted first')),
 )
@@ -149,7 +164,7 @@ TAG_LIST_FORMAT_CHOICES = (
 PAGE_SIZE_CHOICES = (('10', '10',), ('30', '30',), ('50', '50',),)
 ANSWERS_PAGE_SIZE = 10
 USER_POSTS_PAGE_SIZE = 10
-QUESTIONS_PER_PAGE_USER_CHOICES = ((10, u'10'), (30, u'30'), (50, u'50'),)
+QUESTIONS_PER_PAGE_USER_CHOICES = ((10, '10'), (30, '30'), (50, '50'),)
 TAGS_PAGE_SIZE = 60
 
 UNANSWERED_QUESTION_MEANING_CHOICES = (
@@ -160,6 +175,7 @@ UNANSWERED_QUESTION_MEANING_CHOICES = (
 #    ('NO_UPVOTED_ANSWERS',),
 #)
 
+ADMIN_TAGS_CATEGORY_ROOT = "000ADMIN_TAGS_ROOT" # alhpa-numeric sorting will put this first
 #todo:
 #this probably needs to be language-specific
 #and selectable/changeable from the admin interface
@@ -170,11 +186,11 @@ UNANSWERED_QUESTION_MEANING_CHOICES = (
 TAG_CHARS = r'\wp{M}+.#-'
 TAG_FIRST_CHARS = r'[\wp{M}]'
 TAG_FORBIDDEN_FIRST_CHARS = r'#'
-TAG_REGEX_BARE = r'%s[%s]+' % (TAG_FIRST_CHARS, TAG_CHARS)
-TAG_REGEX = r'^%s$' % TAG_REGEX_BARE
+TAG_REGEX_BARE = rf'{TAG_FIRST_CHARS}[{TAG_CHARS}]+'
+TAG_REGEX = rf'^{TAG_REGEX_BARE}$'
 
 TAG_STRIP_CHARS = ', '
-TAG_SPLIT_REGEX = r'[%s]+' % TAG_STRIP_CHARS
+TAG_SPLIT_REGEX = rf'[{TAG_STRIP_CHARS}]+'
 TAG_SEP = ',' # has to be valid TAG_SPLIT_REGEX char and MUST NOT be in const.TAG_CHARS
 #!!! see const.message_keys.TAG_WRONG_CHARS_MESSAGE
 
@@ -212,6 +228,9 @@ TYPE_ACTIVITY_POST_SHARED = 29
 TYPE_ACTIVITY_ASK_TO_JOIN_GROUP = 30
 TYPE_ACTIVITY_MODERATION_ALERT_SENT = 31
 TYPE_ACTIVITY_FORBIDDEN_PHRASE_FOUND = 50 #added gap
+TYPE_ACTIVITY_USER_REGISTERED = 51
+TYPE_ACTIVITY_QUESTION_VIEWED = 52
+TYPE_ACTIVITY_ANSWER_VIEWED = 53
 #TYPE_ACTIVITY_EDIT_QUESTION = 17
 #TYPE_ACTIVITY_EDIT_ANSWER = 18
 
@@ -273,7 +292,58 @@ TYPE_ACTIVITY = (
     (
         TYPE_ACTIVITY_MODERATION_ALERT_SENT,
         'sent moderation alert'#don't translate, internal
-    )
+    ),
+    (
+        TYPE_ACTIVITY_USER_REGISTERED,
+        _('joined')
+    ),
+    (
+        TYPE_ACTIVITY_QUESTION_VIEWED,
+        _('viewed question')
+    ),
+    (
+        TYPE_ACTIVITY_ANSWER_VIEWED,
+        _('viewed answer')
+    ),
+)
+
+def get_activity_type_display(activity_type_key):
+    return dict(TYPE_ACTIVITY).get(activity_type_key)
+
+TYPE_ACTIVITY_BY_USER = (
+    TYPE_ACTIVITY_ASK_QUESTION,
+    TYPE_ACTIVITY_ANSWER,
+    TYPE_ACTIVITY_COMMENT_QUESTION,
+    TYPE_ACTIVITY_COMMENT_ANSWER,
+    TYPE_ACTIVITY_UPDATE_QUESTION,
+    TYPE_ACTIVITY_UPDATE_ANSWER,
+    TYPE_ACTIVITY_MARK_ANSWER,
+    TYPE_ACTIVITY_VOTE_UP,
+    TYPE_ACTIVITY_VOTE_DOWN,
+    TYPE_ACTIVITY_CANCEL_VOTE,
+    TYPE_ACTIVITY_DELETE_QUESTION,
+    TYPE_ACTIVITY_DELETE_ANSWER,
+    TYPE_ACTIVITY_MARK_OFFENSIVE,
+    TYPE_ACTIVITY_UPDATE_TAGS,
+    TYPE_ACTIVITY_FAVORITE,
+    TYPE_ACTIVITY_USER_FULL_UPDATED,
+    TYPE_ACTIVITY_POST_SHARED,
+    TYPE_ACTIVITY_CREATE_TAG_WIKI,
+    TYPE_ACTIVITY_UPDATE_TAG_WIKI,
+    TYPE_ACTIVITY_MODERATED_NEW_POST,
+    TYPE_ACTIVITY_MODERATED_POST_EDIT,
+    TYPE_ACTIVITY_CREATE_REJECT_REASON,
+    TYPE_ACTIVITY_UPDATE_REJECT_REASON,
+    TYPE_ACTIVITY_USER_REGISTERED,
+    TYPE_ACTIVITY_QUESTION_VIEWED,
+    TYPE_ACTIVITY_ANSWER_VIEWED,
+)
+
+SIDEBAR_AVATARS_BLOCK_ACTIVITY_TYPES = (
+    TYPE_ACTIVITY_ASK_QUESTION,
+    TYPE_ACTIVITY_ANSWER,
+    TYPE_ACTIVITY_UPDATE_QUESTION,
+    TYPE_ACTIVITY_UPDATE_ANSWER
 )
 
 MODERATED_EDIT_ACTIVITY_TYPES = (
@@ -282,6 +352,8 @@ MODERATED_EDIT_ACTIVITY_TYPES = (
 )
 MODERATED_ACTIVITY_TYPES = MODERATED_EDIT_ACTIVITY_TYPES + (TYPE_ACTIVITY_MARK_OFFENSIVE,)
 
+
+CELERY_TASK_EMAIL_BATCH_SIZE = 100
 
 #MENTION activity is added implicitly, unfortunately
 RESPONSE_ACTIVITY_TYPES_FOR_INSTANT_NOTIFICATIONS = (
@@ -305,15 +377,15 @@ RESPONSE_ACTIVITY_TYPES_FOR_DISPLAY = (
     TYPE_ACTIVITY_UPDATE_ANSWER,
     TYPE_ACTIVITY_UPDATE_QUESTION,
     TYPE_ACTIVITY_POST_SHARED,
-#    TYPE_ACTIVITY_PRIZE,
-#    TYPE_ACTIVITY_MARK_ANSWER,
-#    TYPE_ACTIVITY_VOTE_UP,
-#    TYPE_ACTIVITY_VOTE_DOWN,
-#    TYPE_ACTIVITY_CANCEL_VOTE,
-#    TYPE_ACTIVITY_DELETE_QUESTION,
-#    TYPE_ACTIVITY_DELETE_ANSWER,
-#    TYPE_ACTIVITY_MARK_OFFENSIVE,
-#    TYPE_ACTIVITY_FAVORITE,
+    #    TYPE_ACTIVITY_PRIZE,
+    #    TYPE_ACTIVITY_MARK_ANSWER,
+    #    TYPE_ACTIVITY_VOTE_UP,
+    #    TYPE_ACTIVITY_VOTE_DOWN,
+    #    TYPE_ACTIVITY_CANCEL_VOTE,
+    #    TYPE_ACTIVITY_DELETE_QUESTION,
+    #    TYPE_ACTIVITY_DELETE_ANSWER,
+    #    TYPE_ACTIVITY_MARK_OFFENSIVE,
+    #    TYPE_ACTIVITY_FAVORITE,
 )
 
 RESPONSE_ACTIVITY_TYPE_MAP_FOR_TEMPLATES = {
@@ -400,9 +472,7 @@ VOTE_TYPES_INVALIDATE_CACHE = (
 #
 VOTE_TYPES = {
     VOTE_ACCEPT_ANSWER: ('answer', ),
-
-    VOTE_FAVORITE: None,  # TODO: not handled in the view
-
+    VOTE_FAVORITE: None, #maybe not used
     # args: (post_type, vote_directiom)
     VOTE_UPVOTE_QUESTION: ('question', 'up'),
     VOTE_DOWNVOTE_QUESTION: ('question', 'down'),
@@ -431,7 +501,7 @@ EXCLUDE_IGNORED = 1
 INCLUDE_INTERESTING = 2
 INCLUDE_SUBSCRIBED = 3
 TAG_DISPLAY_FILTER_STRATEGY_MINIMAL_CHOICES = (
-    (INCLUDE_ALL, _('show all tags')),
+    (INCLUDE_ALL, _('all tags')),
     (EXCLUDE_IGNORED, _('exclude ignored tags')),
     (INCLUDE_INTERESTING, _('only interesting tags'))
 )
@@ -440,40 +510,44 @@ TAG_DISPLAY_FILTER_STRATEGY_CHOICES = \
     ((INCLUDE_SUBSCRIBED, _('only subscribed tags')),)
 
 TAG_EMAIL_FILTER_SIMPLE_STRATEGY_CHOICES = (
-    (INCLUDE_ALL, _('subscribe to all tags')),
+    (INCLUDE_ALL, _('all tags')),
     (EXCLUDE_IGNORED, _('exclude ignored tags')),
     (INCLUDE_INTERESTING, _('only interesting tags')),
 )
 
 TAG_EMAIL_FILTER_ADVANCED_STRATEGY_CHOICES = (
-    (INCLUDE_ALL, _('subscribe to all tags')),
+    (INCLUDE_ALL, _('all tags')),
     (EXCLUDE_IGNORED, _('exclude ignored tags')),
     (INCLUDE_SUBSCRIBED, _('only subscribed tags')),
 )
 
 TAG_EMAIL_FILTER_FULL_STRATEGY_CHOICES = (
-    (INCLUDE_ALL, _('subscribe to all tags')),
+    (INCLUDE_ALL, _('all tags')),
     (EXCLUDE_IGNORED, _('exclude ignored tags')),
     (INCLUDE_INTERESTING, _('only interesting tags')),
     (INCLUDE_SUBSCRIBED, _('only subscribed tags')),
 )
 
 NOTIFICATION_DELIVERY_SCHEDULE_CHOICES = (
-                            ('i',_('instantly')),
-                            ('d',_('daily')),
-                            ('w',_('weekly')),
-                            ('n',_('never')),
-                        )
+    ('i', _('instantly')),
+    ('d', _('daily')),
+    ('w', _('weekly')),
+    ('n', _('never')),
+)
+
+NOTIFICATION_DELIVERY_SCHEDULE_CHOICES_Q_NOANS = (
+    ('d', _('daily')),
+    ('w', _('weekly')),
+    ('n', _('never')),
+)
 
 USERNAME_REGEX_STRING = r'^[\w \-.@+\']+$'
 
-GRAVATAR_TYPE_CHOICES = (
-                            ('identicon',_('identicon')),
-                            ('monsterid',_('monsterid')),
-                            ('wavatar',_('wavatar')),
-                            ('retro',_('retro')),
-                            ('mm',_('mystery-man')),
-                        )
+GRAVATAR_TYPE_CHOICES = (('identicon', _('identicon')),
+                         ('monsterid', _('monsterid')),
+                         ('wavatar', _('wavatar')),
+                         ('retro', _('retro')),
+                         ('mm', _('mystery-man')))
 
 AVATAR_TYPE_CHOICES_FOR_NEW_USERS = (
     ('n', _('Default avatar')),
@@ -481,9 +555,9 @@ AVATAR_TYPE_CHOICES_FOR_NEW_USERS = (
 )
 
 AVATAR_TYPE_CHOICES = AVATAR_TYPE_CHOICES_FOR_NEW_USERS + (
-                    #avatar uploaded locally - with django-avatar app
-                    ('a', _('Uploaded Avatar')),
-                )
+    #avatar uploaded locally - with django-avatar app
+    ('a', _('Uploaded Avatar')),
+)
 
 #chars that can go before or after @mention
 TWITTER_STYLE_MENTION_TERMINATION_CHARS = '\n ;:,.!?<>"\''
@@ -492,12 +566,14 @@ COMMENT_HARD_MAX_LENGTH = 2048
 
 #user status ch
 USER_STATUS_CHOICES = (
-        ('d', _('administrator')), #admin = moderator + access to settings
-        ('m', _('moderator')), #user with moderation privilege
-        ('a', _('approved')), #regular user
-        ('w', _('watched')), #regular user placed on the moderation watch
-        ('s', _('suspended')), #suspended user who cannot post new stuff
-        ('b', _('blocked')), #blocked
+    ('d', _('administrator')), #admin = moderator + access to settings
+    ('m', _('moderator')), #user with moderation privilege
+    ('a', _('approved')), #regular user
+    ('w', _('watched')), #regular user placed on the moderation watch
+    ('s', _('suspended')), #suspended user who cannot post new stuff
+    ('b', _('blocked')), #blocked
+    #terminated account, personal data deleted, content anonymized and retained
+    ('t', _('terminated'))
 )
 DEFAULT_USER_STATUS = 'w'
 
@@ -520,7 +596,10 @@ DEPENDENCY_URLS = {
     'mathjax': 'http://www.mathjax.org/resources/docs/?installation.html',
     'recaptcha': 'http://google.com/recaptcha',
     'twitter-apps': 'http://dev.twitter.com/apps/',
-    'mediawiki-oauth-extension': 'https://www.mediawiki.org/wiki/Extension:OAuth'
+    'mediawiki-oauth-extension': 'https://www.mediawiki.org/wiki/Extension:OAuth',
+    'yammer-apps': 'https://www.yammer.com/client_applications',
+    'windows-live-apps': 'https://apps.dev.microsoft.com/#/appList',
+    'microsoft-azure-apps': 'https://apps.dev.microsoft.com/#/appList',
 }
 
 PASSWORD_MIN_LENGTH = 8
@@ -528,30 +607,27 @@ PASSWORD_MIN_LENGTH = 8
 GOLD_BADGE = 1
 SILVER_BADGE = 2
 BRONZE_BADGE = 3
-BADGE_TYPE_CHOICES = (
-    (GOLD_BADGE,   _('gold')),
-    (SILVER_BADGE, _('silver')),
-    (BRONZE_BADGE, _('bronze')),
-)
+BADGE_TYPE_CHOICES = ((GOLD_BADGE, _('gold')),
+                      (SILVER_BADGE, _('silver')),
+                      (BRONZE_BADGE, _('bronze')))
+
 BADGE_CSS_CLASSES = {
-    GOLD_BADGE: 'badge1',
-    SILVER_BADGE: 'badge2',
-    BRONZE_BADGE: 'badge3',
+    GOLD_BADGE: 'badge with-gold-badge-icon',
+    SILVER_BADGE: 'badge with-silver-badge-icon',
+    BRONZE_BADGE: 'badge with-bronze-badge-icon',
 }
 BADGE_DISPLAY_SYMBOL = '&#9679;'
 
 MIN_REPUTATION = 1
 
-SEARCH_ORDER_BY = (
-                    ('-added_at', _('date descendant')),
-                    ('added_at', _('date ascendant')),
-                    ('-last_activity_at', _('most recently active')),
-                    ('last_activity_at', _('least recently active')),
-                    ('-answer_count', _('more responses')),
-                    ('answer_count', _('fewer responses')),
-                    ('-points', _('more votes')),
-                    ('points', _('less votes')),
-                  )
+SEARCH_ORDER_BY = (('-added_at', _('date descendant')),
+                   ('added_at', _('date ascendant')),
+                   ('-last_activity_at', _('most recently active')),
+                   ('last_activity_at', _('least recently active')),
+                   ('-answer_count', _('more responses')),
+                   ('answer_count', _('fewer responses')),
+                   ('-points', _('more votes')),
+                   ('points', _('less votes')))
 
 DEFAULT_QUESTION_WIDGET_STYLE = """
 @import url('http://fonts.googleapis.com/css?family=Yanone+Kaffeesatz:300,400,700');
@@ -584,5 +660,16 @@ a {
 }
 """
 
-#an exception import * because that file has only strings
-from askbot.const.message_keys import *
+PROFILE_WEBSITE_URL_MAX_LENGTH = 200
+
+GROUP_VISIBILITY_ADMINS = 0
+GROUP_VISIBILITY_MODS = 1
+GROUP_VISIBILITY_MEMBERS = 2
+GROUP_VISIBILITY_PUBLIC = 3
+
+GROUP_VISIBILITY_CHOICES = (
+    (GROUP_VISIBILITY_ADMINS, _('Visible to administrators')),
+    (GROUP_VISIBILITY_MODS, _('Visible to moderators and administrators')),
+    (GROUP_VISIBILITY_MEMBERS, _('Visible to own members, moderators and administrators')),
+    (GROUP_VISIBILITY_PUBLIC, _('Visible to everyone')),
+)

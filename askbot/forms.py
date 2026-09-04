@@ -1,34 +1,32 @@
 """Forms, custom form fields and related utility functions
-used in AskBot"""
-import regex as re #todo: make explicit import
-import datetime
-import askbot
+used in Askbot"""
+from collections import OrderedDict
+from datetime import timedelta
+import logging
 import unicodedata
+import regex as re #todo: make explicit import
 from django import forms
-from askbot import const
-from askbot.const import message_keys
 from django.conf import settings as django_settings
 from django.core.exceptions import PermissionDenied
-from django.forms.util import ErrorList
+from django.forms.utils import ErrorList
 from django.utils import timezone
-from django.utils.html import strip_tags
-from django.utils.datastructures import SortedDict
-from django.utils.translation import ugettext_lazy as _
-from django.utils.translation import ungettext_lazy, string_concat
+from django.utils.translation import gettext_lazy as _
+from django.utils.translation import ngettext_lazy
 from askbot.utils.translation import get_language
-from django.utils.text import get_text_list
+from django.utils.text import get_text_list, format_lazy
 from django.contrib.auth.models import User
 from django_countries import countries
+import askbot
+from askbot import const
+from askbot.const import message_keys, PROFILE_WEBSITE_URL_MAX_LENGTH
 from askbot.utils.forms import NextUrlField, UserNameField
 from askbot.utils.forms import moderated_email_validator
 from askbot.utils.slug import slugify
 from askbot.mail import extract_first_email_address
-from captcha.fields import ReCaptchaField
 from askbot.conf import settings as askbot_settings
 from askbot.conf import get_tag_email_filter_strategy_choices
-from tinymce.widgets import TinyMCE
-import logging
-
+from askbot.models import UserProfile
+from django_recaptcha.fields import ReCaptchaField
 
 def split_tags(data):
     split_re = re.compile(const.TAG_SPLIT_REGEX)
@@ -42,7 +40,7 @@ def split_tags(data):
 def should_use_recaptcha(user):
     """True if user must use recaptcha"""
     return askbot_settings.USE_RECAPTCHA and \
-        (user.is_anonymous() or user.is_watched())
+        (user.is_anonymous or user.is_watched())
 
 
 def cleanup_dict(dictionary, key, empty_value):
@@ -61,7 +59,7 @@ def format_form_errors(form):
     If there are no errors, returns empty string
     """
     if form.errors:
-        errors = form.errors.values()
+        errors = list(form.errors.values())
         if len(errors) == 1:
             return errors[0]
         else:
@@ -186,10 +184,10 @@ class CountryField(forms.ChoiceField):
         except AttributeError:
             from django_countries import data
             country_choices = list()
-            for key, name in data.COUNTRIES.items():
+            for key, name in list(data.COUNTRIES.items()):
                 country_choices.append((key, name))
 
-        country_choices = sorted(country_choices, cmp=lambda a, b: cmp(a[1], b[1]))
+        country_choices = sorted(country_choices, key=lambda c: c[1])
 
         country_choices = (('unknown', _('select country')),) + tuple(country_choices)
         kwargs['choices'] = kwargs.pop('choices', country_choices)
@@ -224,21 +222,20 @@ class CountedWordsField(forms.CharField):
             value = ''
 
         value = value.strip()
-
         word_count = len(value.split())
         if word_count < self.min_words:
-            msg = ungettext_lazy('must be > %d word', 'must be > %d words',
+            msg = ngettext_lazy('must be > %d word', 'must be > %d words',
                                  self.min_words - 1) % (self.min_words - 1)
             # TODO - space is not used in Chinese
             raise forms.ValidationError(
-                string_concat(self.field_name, ' ', msg)
+                format_lazy('{} {}', self.field_name, msg)
             )
 
         if word_count > self.max_words:
-            msg = ungettext_lazy('must be < %d word', 'must be < %d words',
+            msg = ngettext_lazy('must be < %d word', 'must be < %d words',
                                  self.max_words + 1) % (self.max_words + 1)
             raise forms.ValidationError(
-                string_concat(self.field_name, ' ', msg))
+                format_lazy('{} {}', self.field_name, msg))
         return value
 
 
@@ -247,7 +244,6 @@ class AskbotReCaptchaField(ReCaptchaField):
     def __init__(self, *args, **kwargs):
         kwargs.setdefault('private_key', askbot_settings.RECAPTCHA_SECRET)
         kwargs.setdefault('public_key', askbot_settings.RECAPTCHA_KEY)
-        kwargs.setdefault('use_ssl', True)
         super(AskbotReCaptchaField, self).__init__(*args, **kwargs)
 
 
@@ -318,7 +314,7 @@ class TitleField(forms.CharField):
 
         chars = slugify(value).replace('-', '')
         if len(chars) < askbot_settings.MIN_TITLE_LENGTH:
-            msg = ungettext_lazy(
+            msg = ngettext_lazy(
                 'must have > %d non-punctuation character',
                 'must have > %d non-punctuation characters',
                 askbot_settings.MIN_TITLE_LENGTH
@@ -361,35 +357,29 @@ class EditorField(forms.CharField):
         self.required = True
         if askbot_settings.EDITOR_TYPE == 'markdown':
             self.widget = forms.Textarea(attrs=widget_attrs)
-        elif askbot_settings.EDITOR_TYPE == 'tinymce':
-            self.widget = TinyMCE(attrs=widget_attrs, mce_attrs=editor_attrs)
         self.min_length = 10
 
     def clean(self, value):
         value = value or ''
-
-        if askbot_settings.EDITOR_TYPE == 'tinymce':
-            text_length = len(strip_tags(value).strip())
-        else:
-            text_length = len(value.strip())
+        text_length = len(value.strip())
 
         if text_length < self.min_length:
-            msg = ungettext_lazy(
+            msg = ngettext_lazy(
                 'enter > %(length)d character',
                 'enter > %(length)d characters',
                 self.min_length
             ) % {'length': self.min_length}
             raise forms.ValidationError(msg)
 
-        if self.user.is_anonymous():
+        if self.user.is_anonymous:
             # we postpone this validation if user is posting
             # before logging in, up until publishing the post
             return value
 
         try:
             self.user.assert_can_post_text(value)
-        except PermissionDenied, err:
-            raise forms.ValidationError(unicode(err))
+        except PermissionDenied as err:
+            raise forms.ValidationError(str(err))
 
         return value
 
@@ -419,7 +409,7 @@ def clean_tag(tag_name, look_in_db=True):
     if tag_length > askbot_settings.MAX_TAG_LENGTH:
         # singular form is odd in english, but required for pluralization
         # in other languages
-        msg = ungettext_lazy(
+        msg = ngettext_lazy(
             # odd but added for completeness
             'each tag must be shorter than %(max_chars)d character',
             'each tag must be shorter than %(max_chars)d characters',
@@ -468,7 +458,7 @@ class TagNamesField(forms.CharField):
                             'We ran out of space for recording the tags. '
                             'Please shorten or delete some of them.')
         self.label = kwargs.get('label') or _('tags')
-        self.help_text = kwargs.get('help_text') or ungettext_lazy(
+        self.help_text = kwargs.get('help_text') or ngettext_lazy(
             'Tags are short keywords, with no spaces within. '
             'Up to %(max_tags)d tag can be used.',
             'Tags are short keywords, with no spaces within. '
@@ -493,7 +483,7 @@ class TagNamesField(forms.CharField):
         tag_count = len(tag_strings)
         if tag_count > askbot_settings.MAX_TAGS_PER_POST:
             max_tags = askbot_settings.MAX_TAGS_PER_POST
-            msg = ungettext_lazy(
+            msg = ngettext_lazy(
                         'please use %(tag_count)d tag or less',
                         'please use %(tag_count)d tags or less',
                         tag_count) % {'tag_count': max_tags}
@@ -512,12 +502,12 @@ class TagNamesField(forms.CharField):
             if cleaned_tag not in cleaned_entered_tags:
                 cleaned_entered_tags.append(clean_tag(tag))
 
-        result = u' '.join(cleaned_entered_tags)
+        result = ' '.join(cleaned_entered_tags)
 
         if len(result) > 125:  # magic number!, the same as max_length in db
             raise forms.ValidationError(self.error_messages['max_length'])
 
-        return u' '.join(cleaned_entered_tags)
+        return ' '.join(cleaned_entered_tags)
 
 
 class WikiField(forms.BooleanField):
@@ -559,7 +549,7 @@ class SortField(forms.ChoiceField):
 
     def clean(self, value):
         value = value or self.default
-        if value not in dict(self.choices).keys():
+        if value not in list(dict(self.choices).keys()):
             value = self.default
         return value
 
@@ -636,7 +626,7 @@ class ShowQuestionForm(forms.Form):
         or invalid"""
         if self._errors:
             # since the form is always valid, clear the errors
-            logging.error(unicode(self._errors))
+            logging.error(str(self._errors))
             self._errors = {}
 
         in_data = self.get_pruned_data()
@@ -687,7 +677,7 @@ class ChangeUserReputationForm(forms.Form):
 
     user_reputation_delta = forms.IntegerField(
         min_value=1, max_value=32767,
-        label=_('Enter number of points to add or subtract'))
+        label=_('Enter number of points'))
     comment = forms.CharField(label=_('Comment'), max_length=128)
 
     def clean_comment(self):
@@ -737,7 +727,7 @@ class ChangeUserStatusForm(forms.Form):
         super(ChangeUserStatusForm, self).__init__(*arg, **kwarg)
 
         # Select user_status_choices depending on status of the moderator
-        if moderator.is_authenticated():
+        if moderator.is_authenticated:
             if moderator.is_administrator():
                 user_status_choices = ADMINISTRATOR_STATUS_CHOICES
             elif moderator.is_moderator():
@@ -857,7 +847,7 @@ class FeedbackForm(forms.Form):
 
     def clean(self):
         super(FeedbackForm, self).clean()
-        if self.user and self.user.is_anonymous():
+        if self.user and self.user.is_anonymous:
             need_email = not bool(self.cleaned_data.get('no_email', False))
             email = self.cleaned_data.get('email', '').strip()
             if need_email and email == '':
@@ -907,7 +897,7 @@ class PostPrivatelyForm(forms.Form, FormWithHideableFields):
         user = self._user
         return (
             askbot_settings.GROUPS_ENABLED and
-            user and user.is_authenticated() and
+            user and user.is_authenticated and
             user.can_make_group_private_posts()
         )
 
@@ -948,7 +938,7 @@ class PostAsSomeoneForm(forms.Form):
         username = self.cleaned_data['post_author_username']
         email = self.cleaned_data['post_author_email']
         if user.is_administrator() and username and email:
-            post_user = user.get_or_create_fake_user(username, email)
+            post_user = user.get_or_create_fake_user(username, email, status='a')
         else:
             post_user = user
         return post_user
@@ -960,7 +950,7 @@ class PostAsSomeoneForm(forms.Form):
         then we would not have to have two almost identical clean functions?
         """
         username = self.cleaned_data.get('post_author_username', '').strip()
-        initial_username = unicode(self.fields['post_author_username'].initial)
+        initial_username = str(self.fields['post_author_username'].initial)
         if username and username == initial_username:
             self.cleaned_data['post_author_username'] = ''
         return self.cleaned_data['post_author_username']
@@ -969,7 +959,7 @@ class PostAsSomeoneForm(forms.Form):
         """if value is the same as initial, it is reset to
         empty string"""
         email = self.cleaned_data.get('post_author_email', '').strip()
-        initial_email = unicode(self.fields['post_author_email'].initial)
+        initial_email = str(self.fields['post_author_email'].initial)
         if email == initial_email:
             email = ''
         if email != '':
@@ -1012,22 +1002,23 @@ class AskForm(PostAsSomeoneForm, PostPrivatelyForm):
 
     def __init__(self, *args, **kwargs):
         user = kwargs.get('user', None)
+        self.user = user
         super(AskForm, self).__init__(*args, **kwargs)
         # It's important that this field is set up dynamically
         self.fields['title'] = TitleField()
         self.fields['tags'] = TagNamesField()
 
         if askbot_settings.MIN_QUESTION_BODY_LENGTH == 0:
-            label = _('Add details (optional)')
+            label = _('Add details below (optional)')
         else:
-            label = _('Add details')
+            label = _('Add details below')
 
         self.fields['text'] = QuestionEditorField(user=user, label=label)
 
         self.fields['ask_anonymously'] = forms.BooleanField(
             label=_('post anonymously'), required=False)
 
-        if user.is_anonymous() or not askbot_settings.ALLOW_ASK_ANONYMOUSLY:
+        if user.is_anonymous or not askbot_settings.ALLOW_ASK_ANONYMOUSLY:
             self.hide_field('ask_anonymously')
 
         if askbot.is_multilingual():
@@ -1042,6 +1033,23 @@ class AskForm(PostAsSomeoneForm, PostPrivatelyForm):
         if not askbot_settings.ALLOW_ASK_ANONYMOUSLY:
             self.cleaned_data['ask_anonymously'] = False
         return self.cleaned_data['ask_anonymously']
+
+    def clean_tags(self):
+        tags = TagNamesField().clean(self.cleaned_data['tags'])
+        if not askbot_settings.ADMIN_TAGS_ENABLED:
+            return tags
+
+        if self.user and self.user.is_authenticated and self.user.can_manage_admin_tags():
+            return tags
+        admin_tags = set(split_tags(askbot_settings.ADMIN_TAGS))
+        bad_tags = set(split_tags(tags)) & admin_tags
+        if bad_tags:
+            if len(bad_tags) == 1:
+                message = _('Only administrators and moderators can add the tag "%s"') % bad_tags.pop()
+            else:
+                message = _('Only administrators and moderators can add the tags "%s"') % ', '.join(bad_tags)
+            raise forms.ValidationError(message)
+        return tags
 
 ASK_BY_EMAIL_SUBJECT_HELP = _(
     'Subject line is expected in the format: '
@@ -1061,7 +1069,7 @@ class AskWidgetForm(forms.Form, FormWithHideableFields):
         super(AskWidgetForm, self).__init__(*args, **kwargs)
         self.fields['title'] = TitleField()
         # hide ask_anonymously field
-        if user.is_anonymous() or not askbot_settings.ALLOW_ASK_ANONYMOUSLY:
+        if user.is_anonymous or not askbot_settings.ALLOW_ASK_ANONYMOUSLY:
             self.hide_field('ask_anonymously')
         self.fields['text'] = QuestionEditorField(user=user)
         if not include_text:
@@ -1242,7 +1250,11 @@ class VoteForm(forms.Form):
 
 
 class CloseForm(forms.Form):
-    reason = forms.ChoiceField(choices=const.CLOSE_REASONS)
+    def __init__(self, *args, **kwargs):
+        super(CloseForm, self).__init__(*args, **kwargs)
+        reasons = askbot_settings.QUESTION_CLOSE_REASONS
+        close_choices = tuple([tuple([reason, reason]) for reason in reasons])
+        self.fields['reason'] = forms.ChoiceField(choices=close_choices)
 
 
 class RetagQuestionForm(forms.Form):
@@ -1268,73 +1280,12 @@ class RevisionForm(forms.Form):
         date_format = '%c'
         rev_choices = list()
         for r in revisions:
-            rev_details = u'%s - %s (%s) %s' % (
+            rev_details = '%s - %s (%s) %s' % (
                 r[0], r[1], r[2].strftime(date_format), r[3])
             rev_choices.append((r[0], rev_details))
 
         self.fields['revision'].choices = rev_choices
         self.fields['revision'].initial = latest_revision.revision
-
-
-class EditQuestionForm(PostAsSomeoneForm, PostPrivatelyForm):
-    summary = SummaryField()
-    wiki = WikiField()
-    suppress_email = SuppressEmailField()
-
-    # TODO: this is odd that this form takes question as an argument
-    def __init__(self, *args, **kwargs):
-        """populate EditQuestionForm with initial data"""
-        self.question = kwargs.pop('question')
-        self.user = kwargs.get('user')#preserve for superclass
-        revision = kwargs.pop('revision')
-        super(EditQuestionForm, self).__init__(*args, **kwargs)
-        # it is important to add this field dynamically
-        self.fields['text'] = QuestionEditorField(user=self.user)
-        self.fields['title'] = TitleField()
-        self.fields['title'].initial = revision.title
-        self.fields['text'].initial = revision.text
-        self.fields['text'].label = _('Details')
-        self.fields['tags'] = TagNamesField()
-        self.fields['tags'].initial = revision.tagnames
-        self.fields['wiki'].initial = self.question.wiki
-        # hide the reveal identity field
-        if self.can_edit_anonymously():
-            self.fields['reveal_identity'] = forms.BooleanField(
-                    label=_('remove anonymity'), required=False,)
-
-        if askbot.is_multilingual():
-            self.fields['language'] = LanguageField()
-
-        if should_use_recaptcha(self.user):
-            self.fields['recaptcha'] = AskbotReCaptchaField()
-
-    def clean(self):
-        edit_anonymously = not self.cleaned_data.get('reveal_identity', True)
-        self.cleaned_data['edit_anonymously'] = edit_anonymously
-        return self.cleaned_data
-
-    def has_changed(self):
-        if super(EditQuestionForm, self).has_changed():
-            return True
-
-        if askbot_settings.GROUPS_ENABLED:
-            was_private = self.question.is_private()
-            if was_private != self.cleaned_data['post_privately']:
-                return True
-
-        if askbot.is_multilingual():
-            old_language = self.question.thread.language_code
-            if old_language != self.cleaned_data['language']:
-                return True
-        else:
-            return False
-
-    def can_edit_anonymously(self):
-        """determines if the user cat keep editing the question
-        anonymously"""
-        return (askbot_settings.ALLOW_ASK_ANONYMOUSLY and
-                self.question.is_anonymous and
-                self.user.is_owner_of(self.question))
 
 
 class EditAnswerForm(PostAsSomeoneForm, PostPrivatelyForm):
@@ -1356,7 +1307,6 @@ class EditAnswerForm(PostAsSomeoneForm, PostPrivatelyForm):
             self.fields['recaptcha'] = AskbotReCaptchaField()
 
     def has_changed(self):
-        # TODO: this function is almost copy/paste of EditQuestionForm.has_changed()
         if super(EditAnswerForm, self).has_changed():
             return True
         if askbot_settings.GROUPS_ENABLED:
@@ -1373,7 +1323,7 @@ class EditTagWikiForm(forms.Form):
 
 class EditUserForm(forms.Form):
     email = forms.EmailField(
-        label=u'Email', required=False, max_length=255,
+        label='Email', required=False, max_length=255,
         widget=forms.TextInput(attrs={'size': 35}))
 
     realname = forms.CharField(
@@ -1381,7 +1331,7 @@ class EditUserForm(forms.Form):
         widget=forms.TextInput(attrs={'size': 35}))
 
     website = forms.URLField(
-        label=_('Website'), required=False, max_length=255,
+        label=_('Website'), required=False, max_length=PROFILE_WEBSITE_URL_MAX_LENGTH,
         widget=forms.TextInput(attrs={'size': 35}))
 
     city = forms.CharField(
@@ -1402,10 +1352,6 @@ class EditUserForm(forms.Form):
             'age, format: YYYY-MM-DD'
             ),
         widget=forms.TextInput(attrs={'size': 35}))
-
-    about = forms.CharField(
-        label=_('Profile'), required=False,
-        widget=forms.Textarea(attrs={'cols': 60}))
 
     def __init__(self, user, *args, **kwargs):
         super(EditUserForm, self).__init__(*args, **kwargs)
@@ -1430,7 +1376,6 @@ class EditUserForm(forms.Form):
         if user.date_of_birth is not None:
             self.fields['birthday'].initial = user.date_of_birth
 
-        self.fields['about'].initial = user.get_localized_profile().about
         self.user = user
 
     def clean_email(self):
@@ -1438,6 +1383,10 @@ class EditUserForm(forms.Form):
         email = self.cleaned_data.get('email', '').strip()
         if email == '' and askbot_settings.BLANK_EMAIL_ALLOWED:
             self.cleaned_data['email'] = ''
+            return self.cleaned_data['email']
+
+        if not askbot_settings.EDITABLE_EMAIL:
+            self.cleaned_data['email'] = self.user.email
             return self.cleaned_data['email']
 
         moderated_email_validator(email)
@@ -1460,7 +1409,8 @@ class EditUserForm(forms.Form):
 
 class TagFilterSelectionForm(forms.ModelForm):
     email_tag_filter_strategy = forms.ChoiceField(
-        initial=const.EXCLUDE_IGNORED, label=_('Choose email tag filter'),
+        initial=const.EXCLUDE_IGNORED,
+        label=_('Choose email tag filter'),
         widget=forms.RadioSelect)
 
     def __init__(self, *args, **kwargs):
@@ -1469,7 +1419,7 @@ class TagFilterSelectionForm(forms.ModelForm):
         self.fields['email_tag_filter_strategy'].choices = choices
 
     class Meta:
-        model = User
+        model = UserProfile
         fields = ('email_tag_filter_strategy',)
 
     def save(self):
@@ -1481,7 +1431,7 @@ class TagFilterSelectionForm(forms.ModelForm):
 
 class EmailFeedSettingField(forms.ChoiceField):
     def __init__(self, *arg, **kwarg):
-        kwarg['choices'] = const.NOTIFICATION_DELIVERY_SCHEDULE_CHOICES
+        kwarg['choices'] = kwarg.get('choices', const.NOTIFICATION_DELIVERY_SCHEDULE_CHOICES)
         kwarg['widget'] = forms.RadioSelect
         super(EmailFeedSettingField, self).__init__(*arg, **kwarg)
 
@@ -1493,12 +1443,14 @@ class EditUserEmailFeedsForm(forms.Form):
         'answered_by_me': 'q_ans',
         'individually_selected': 'q_sel',
         'mentions_and_comments': 'm_and_c',
+        'unanswered_questions': 'q_noans'
     }
     NO_EMAIL_INITIAL = {
         'all_questions': 'n',
         'asked_by_me': 'n',
         'answered_by_me': 'n',
         'individually_selected': 'n',
+        'unanswered_questions': 'n',
         'mentions_and_comments': 'n',
     }
     INSTANT_EMAIL_INITIAL = {
@@ -1506,22 +1458,29 @@ class EditUserEmailFeedsForm(forms.Form):
         'asked_by_me': 'i',
         'answered_by_me': 'i',
         'individually_selected': 'i',
+        'unanswered_questions': 'd',
         'mentions_and_comments': 'i',
     }
 
     def __init__(self, *args, **kwargs):
         super(EditUserEmailFeedsForm, self).__init__(*args, **kwargs)
-        self.fields = SortedDict((
+        self.fields = OrderedDict((
             ('asked_by_me', EmailFeedSettingField(label=askbot_settings.WORDS_ASKED_BY_ME)),
             ('answered_by_me', EmailFeedSettingField(label=askbot_settings.WORDS_ANSWERED_BY_ME)),
             ('individually_selected', EmailFeedSettingField(label=_('Individually selected'))),
+            ('unanswered_questions',
+                EmailFeedSettingField(
+                    label=_('Unanswered questions'),
+                    choices=const.NOTIFICATION_DELIVERY_SCHEDULE_CHOICES_Q_NOANS
+                )
+            ),
             ('all_questions', EmailFeedSettingField(label=_('Entire forum (tag filtered)'))),
-            ('mentions_and_comments', EmailFeedSettingField(label=_('Comments and posts mentioning me')))
+            ('mentions_and_comments', EmailFeedSettingField(label=_('Comments and posts mentioning me'))),
         ))
 
     def set_initial_values(self, user=None):
         from askbot import models
-        KEY_MAP = dict([(v, k) for k, v in self.FORM_TO_MODEL_MAP.iteritems()])
+        KEY_MAP = dict([(v, k) for k, v in self.FORM_TO_MODEL_MAP.items()])
         if user is not None:
             settings = models.EmailFeedSetting.objects.filter(subscriber=user)
             initial_values = {}
@@ -1551,11 +1510,12 @@ class EditUserEmailFeedsForm(forms.Form):
         # TODO: refactor this - too hacky
         # should probably use model form instead
 
-        return self.FORM_TO_MODEL_MAP.values()
+        return list(self.FORM_TO_MODEL_MAP.values())
 
     def set_frequency(self, frequency='n'):
         data = {
             'all_questions': frequency,
+            'unanswered_questions': frequency,
             'asked_by_me': frequency,
             'answered_by_me': frequency,
             'individually_selected': frequency,
@@ -1571,7 +1531,7 @@ class EditUserEmailFeedsForm(forms.Form):
         """
         from askbot import models
         changed = False
-        for form_field, feed_type in self.FORM_TO_MODEL_MAP.items():
+        for form_field, feed_type in list(self.FORM_TO_MODEL_MAP.items()):
             s, created = models.EmailFeedSetting.objects.get_or_create(
                     subscriber=user, feed_type=feed_type)
             if save_unbound:
@@ -1630,8 +1590,13 @@ class SimpleEmailSubscribeForm(forms.Form):
 
 class UnsubscribeForm(forms.Form):
     key = forms.CharField(widget=forms.HiddenInput)
-    email = forms.CharField(widget=forms.HiddenInput)  # Allow invalid email
+    email = forms.EmailField(widget=forms.HiddenInput)
 
+    def clean_key(self):
+        key = self.cleaned_data['key']
+        if not re.match('[\da-z].*', key):
+            raise forms.ValidationError(_('Invalid key'))
+        return key
 
 class GroupLogoURLForm(forms.Form):
     """form for saving group logo url"""
@@ -1659,7 +1624,6 @@ class EditRejectReasonForm(forms.Form):
     reason_id = forms.IntegerField(required=False)
     title = CountedWordsField(min_words=1, max_words=4, field_name=_('Title'))
     details = CountedWordsField(min_words=6, field_name=_('Description'))
-
 
 class ModerateTagForm(forms.Form):
     tag_id = forms.IntegerField()
@@ -1693,6 +1657,38 @@ class GetDataForPostForm(forms.Form):
     post_id = forms.IntegerField()
 
 
+class SetPostBodyForm(forms.Form):
+    post_id = forms.IntegerField()
+    body_text = forms.CharField()
+    suppress_email = SuppressEmailField()
+
+
+class SearchPostsForm(forms.Form):
+    post_id = forms.IntegerField()
+    q = forms.CharField()
+    post_ord = forms.IntegerField()
+
+    def clean_post_ord(self):
+        post_ord = self.cleaned_data.get('post_ord')
+        if post_ord and post_ord > 0:
+            return post_ord
+        return None
+
+    def clean_post_id(self):
+        post_id = self.cleaned_data.get('post_id')
+        if post_id and post_id > 0:
+            return post_id
+        return None
+
+    def clean(self):
+        """cannot have both post_id and post_ord"""
+        post_ord = self.cleaned_data.get('post_ord')
+        post_id = self.cleaned_data.get('post_id')
+        if post_ord and post_id:
+            self.cleaned_data['post_ord'] = None
+        return self.cleaned_data
+
+
 class GetCommentDataForPostForm(GetDataForPostForm):
     avatar_size = forms.IntegerField()
 
@@ -1709,7 +1705,7 @@ class UserForm(forms.Form):
 
 class UserDescriptionForm(forms.Form):
     user_id = forms.IntegerField()
-    description = forms.CharField()
+    description = forms.CharField(required=False)
 
 
 class NewCommentForm(forms.Form):
@@ -1742,3 +1738,289 @@ class ConvertCommentForm(forms.Form):
 class ReorderBadgesForm(forms.Form):
     badge_id = forms.IntegerField()
     position = forms.IntegerField()
+
+
+class AnalyticsUsersSegmentField(forms.CharField):
+    """
+    A field that accepts a string that is a valid users segment.
+    Valid segments are:
+    - 'all'
+    - the default segment
+    - group:<group_id>
+    - user:<user_id>
+    - named segments
+    """
+    def clean(self, users_segment):
+        from askbot.utils.analytics_utils import get_analytics_default_segment_config
+        default_segment_config = get_analytics_default_segment_config()
+        default_segment_slug = default_segment_config['slug']
+        named_segment_slugs = [segment['slug'] for segment in django_settings.ASKBOT_ANALYTICS_NAMED_SEGMENTS]
+        allowed_segment_slugs = ['all-users', 'all', default_segment_slug] + named_segment_slugs
+        if users_segment in allowed_segment_slugs:
+            return users_segment
+
+        if re.match(r'group:\d+', users_segment):
+            return users_segment
+
+        if re.match(r'user:\d+', users_segment):
+            return users_segment
+
+        raise forms.ValidationError('Invalid users segment')
+
+
+class AnalyticsDatesField(forms.CharField):
+    """
+    A field that accepts a string that is a valid date range.
+    Valid date ranges are:
+    - last-7-days
+    - last-30-days
+    - this-month
+    - last-month
+    - last-3-months
+    - this-year
+    - last-year
+    - all-time
+    """
+    def __init__(self, earliest_date, *args, **kwargs):
+        super(AnalyticsDatesField, self).__init__(*args, **kwargs)
+        self.earliest_date = earliest_date
+
+    def clean(self, dates):
+        if dates == 'last-7-days':
+            end_date = timezone.now().date()
+            start_date = end_date - timedelta(days=6)
+            return start_date, end_date
+        if dates == 'last-30-days':
+            end_date = timezone.now().date()
+            start_date = end_date - timedelta(days=29)
+            return start_date, end_date
+        if dates == 'this-month':
+            end_date = timezone.now().date()
+            start_date = end_date.replace(day=1)
+            return start_date, end_date
+        if dates == 'last-month':
+            now = timezone.now().date()
+            this_month_start = now.replace(day=1)
+            last_month_end = this_month_start - timedelta(days=1)
+            last_month_start = last_month_end.replace(day=1)
+            return last_month_start, last_month_end
+        if dates == 'last-3-months':
+            now = timezone.now().date()
+            this_month_start = now.replace(day=1)
+            last_month_end = this_month_start - timedelta(days=1)
+            three_months_ago_approx_end = last_month_end - timedelta(days=62)
+            three_months_ago_start = three_months_ago_approx_end.replace(day=1)
+            return three_months_ago_start, last_month_end
+        if dates == 'last-6-months':
+            now = timezone.now().date()
+            this_month_start = now.replace(day=1)
+            last_month_end = this_month_start - timedelta(days=1)
+            six_months_ago_approx_end = last_month_end - timedelta(days=155)
+            six_months_ago_start = six_months_ago_approx_end.replace(day=1)
+            return six_months_ago_start, last_month_end
+        if dates == 'this-year':
+            now = timezone.now().date()
+            this_year_start = now.replace(month=1, day=1)
+            return this_year_start, now
+        if dates == 'last-year':
+            now = timezone.now().date()
+            last_year_start = now.replace(year=now.year - 1, month=1, day=1)
+            last_year_end = last_year_start.replace(year=now.year - 1, month=12, day=31)
+            return last_year_start, last_year_end
+
+        if dates == 'all-time':
+            return self.earliest_date, timezone.now().date()
+
+        raise forms.ValidationError('Invalid date range')
+
+
+class AnalyticsActivityField(forms.CharField):
+    """
+    A field that accepts a string that is a valid activity segment.
+    After validation, the field returns list of event types as defined in the Events model
+    """
+    ALL_ACTIVITY = 'all-activity'
+    REGISTERED = 'registered'
+    LOGGED_IN = 'logged-in'
+    LOGGED_OUT = 'logged-out'
+    QUESTION_VIEWED = 'question-viewed'
+    ANSWER_VIEWED = 'answer-viewed'
+    CONTENT_VOTED = 'content-voted'
+    CONTENT_UPVOTED = 'content-upvoted'
+    CONTENT_DOWNVOTED = 'content-downvoted'
+    QUESTION_POSTED = 'question-posted'
+    ANSWER_POSTED = 'answer-posted'
+    QUESTION_COMMENTED = 'question-commented'
+    ANSWER_COMMENTED = 'answer-commented'
+    CONTENT_COMMENTED = 'content-commented'
+    QUESTION_RETAGGED = 'question-retagged'
+    ANY_CONTENT_POSTED = 'any-content-posted'
+
+    def clean(self, activity_segment):
+        from askbot.models.analytics import Event
+        if activity_segment == self.ALL_ACTIVITY:
+            return [Event.EVENT_TYPE_USER_REGISTERED,
+                    Event.EVENT_TYPE_LOGGED_IN,
+                    Event.EVENT_TYPE_LOGGED_OUT,
+                    Event.EVENT_TYPE_QUESTION_VIEWED,
+                    Event.EVENT_TYPE_ANSWER_VIEWED,
+                    Event.EVENT_TYPE_UPVOTED,
+                    Event.EVENT_TYPE_DOWNVOTED,
+                    Event.EVENT_TYPE_VOTE_CANCELED,
+                    Event.EVENT_TYPE_ASKED,
+                    Event.EVENT_TYPE_ANSWERED,
+                    Event.EVENT_TYPE_QUESTION_COMMENTED,
+                    Event.EVENT_TYPE_ANSWER_COMMENTED,
+                    Event.EVENT_TYPE_QUESTION_RETAGGED]
+        if activity_segment == self.REGISTERED:
+            return [Event.EVENT_TYPE_USER_REGISTERED]
+        if activity_segment == self.LOGGED_IN:
+            return [Event.EVENT_TYPE_LOGGED_IN]
+        if activity_segment == self.LOGGED_OUT:
+            return [Event.EVENT_TYPE_LOGGED_OUT]
+        if activity_segment == self.QUESTION_VIEWED:
+            return [Event.EVENT_TYPE_QUESTION_VIEWED]
+        if activity_segment == self.ANSWER_VIEWED:
+            return [Event.EVENT_TYPE_ANSWER_VIEWED]
+        if activity_segment == self.CONTENT_VOTED:
+            return [Event.EVENT_TYPE_UPVOTED, Event.EVENT_TYPE_DOWNVOTED, Event.EVENT_TYPE_VOTE_CANCELED]
+        if activity_segment == self.CONTENT_UPVOTED:
+            return [Event.EVENT_TYPE_UPVOTED]
+        if activity_segment == self.CONTENT_DOWNVOTED:
+            return [Event.EVENT_TYPE_DOWNVOTED]
+        if activity_segment == self.QUESTION_POSTED:
+            return [Event.EVENT_TYPE_ASKED]
+        if activity_segment == self.ANSWER_POSTED:
+            return [Event.EVENT_TYPE_ANSWERED]
+        if activity_segment == self.QUESTION_COMMENTED:
+            return [Event.EVENT_TYPE_QUESTION_COMMENTED]
+        if activity_segment == self.CONTENT_COMMENTED:
+            return [Event.EVENT_TYPE_ANSWER_COMMENTED, Event.EVENT_TYPE_QUESTION_COMMENTED]
+        if activity_segment == self.ANSWER_COMMENTED:
+            return [Event.EVENT_TYPE_ANSWER_COMMENTED]
+        if activity_segment == self.QUESTION_RETAGGED:
+            return [Event.EVENT_TYPE_QUESTION_RETAGGED]
+        if activity_segment == self.ANY_CONTENT_POSTED:
+            return [Event.EVENT_TYPE_ASKED, Event.EVENT_TYPE_ANSWERED, Event.EVENT_TYPE_QUESTION_COMMENTED, Event.EVENT_TYPE_ANSWER_COMMENTED]
+        raise forms.ValidationError('Invalid activity segment')
+
+    @classmethod
+    def get_field_display(cls, activity_segment):
+        if activity_segment == cls.ALL_ACTIVITY:
+            return _('All Events')
+        if activity_segment == cls.REGISTERED:
+            return _('User Registered')
+        if activity_segment == cls.LOGGED_IN:
+            return _('User Logged In')
+        if activity_segment == cls.LOGGED_OUT:
+            return _('User Logged Out')
+        if activity_segment == cls.QUESTION_VIEWED:
+            return _('Question Viewed')
+        if activity_segment == cls.ANSWER_VIEWED:
+            return _('Answer Viewed')
+        if activity_segment == cls.CONTENT_VOTED:
+            return _('Content Voted')
+        if activity_segment == cls.CONTENT_UPVOTED:
+            return _('Content Upvoted')
+        if activity_segment == cls.CONTENT_DOWNVOTED:
+            return _('Content Downvoted')
+        if activity_segment == cls.QUESTION_POSTED:
+            return _('Question Posted')
+        if activity_segment == cls.ANSWER_POSTED:
+            return _('Answer Posted')
+        if activity_segment == cls.QUESTION_COMMENTED:
+            return _('Question Commented')
+        if activity_segment == cls.ANSWER_COMMENTED:
+            return _('Answer Commented')
+        if activity_segment == cls.QUESTION_RETAGGED:
+            return _('Question Retagged')
+        if activity_segment == cls.ANY_CONTENT_POSTED:
+            return _('Any Content Posted')
+        raise ValueError('Invalid activity segment')
+
+
+class AnalyticsContentField(forms.CharField):
+    """
+    A field that accepts a string that is a valid content segment.
+    If the field is valid, just returns the value.
+    Otherwise, raises a validation error.
+    """
+    def clean(self, content_segment):
+        if re.match('thread:\d+', content_segment):
+            return content_segment
+        if re.match('post:\d+', content_segment):
+            return content_segment
+        if content_segment == 'all-content':
+            return content_segment
+        # it will be very hard to filter events by the post type,
+        # because the post relation from the event is generic
+        raise forms.ValidationError('Invalid content segment')
+
+    @staticmethod
+    def get_field_display(content_segment):
+        if re.match('thread:\d+', content_segment):
+            return _('Selected Thread')
+        if re.match('post:\d+', content_segment):
+            return _('Selected Post')
+        if content_segment == 'all-content':
+            return _('All Content')
+        raise ValueError('Invalid content segment')
+
+
+class AnalyticsUsersForm(forms.Form):
+    """dates is a string that accepts a list of pre-approved values
+    Such as last-7-days, this-year, etc., as defined in the analytics dates
+    selector dropdown template.
+    """
+    users_segment = AnalyticsUsersSegmentField()
+    query = forms.CharField(required=False)
+    sort_by = forms.CharField(required=False)
+    sort_order = forms.CharField(required=False)
+
+    def __init__(self, *args, **kwargs):
+        earliest_possible_date = kwargs.pop('earliest_possible_date')
+        super(AnalyticsUsersForm, self).__init__(*args, **kwargs)
+        self.fields['dates'] = AnalyticsDatesField(earliest_date=earliest_possible_date)
+
+    def clean_sort_order(self):
+        sort_order = self.cleaned_data.get('sort_order', 'desc')
+        if sort_order not in ('asc', 'desc'):
+            return 'desc'
+        return sort_order
+
+    def clean_sort_by(self):
+        sort_by = self.cleaned_data.get('sort_by', 'time_on_site')
+        if sort_by  not in ('username',
+                            'orgname',
+                            'num_questions',
+                            'num_answers',
+                            'num_upvotes',
+                            'num_downvotes',
+                            'num_users_added',
+                            'time_on_site'):
+            return 'time_on_site'
+        return sort_by
+
+    def clean(self):
+        sort_order = self.cleaned_data.get('sort_order', 'desc')
+        sort_by = self.cleaned_data.get('sort_by', 'time_on_site')
+        if sort_order == 'desc':
+            order_by = '-' + sort_by
+        else:
+            order_by = sort_by
+        self.cleaned_data['order_by'] = order_by
+        return self.cleaned_data
+
+
+class AnalyticsActivityForm(forms.Form):
+    activity_segment = AnalyticsActivityField()
+    content_segment = AnalyticsContentField()
+    users_segment = AnalyticsUsersSegmentField()
+
+    def __init__(self, *args, **kwargs):
+        earliest_possible_date = kwargs.pop('earliest_possible_date')
+        super(AnalyticsActivityForm, self).__init__(*args, **kwargs)
+        self.fields['dates'] = AnalyticsDatesField(earliest_date=earliest_possible_date)
+
+class PaginationForm(forms.Form):
+    page = PageField()

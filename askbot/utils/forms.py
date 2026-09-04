@@ -1,36 +1,60 @@
 import re
 from django import forms
+from django.apps import apps
+from django.conf import settings as django_settings
 from django.contrib.auth.models import User
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.http import Http404
 from django.shortcuts import get_object_or_404
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from askbot.conf import settings as askbot_settings
 from askbot.utils.slug import slugify
-from askbot.utils.functions import split_list, mark_safe_lazy
+from askbot.utils.functions import encode_jwt, decode_jwt, split_list, mark_safe_lazy
 from askbot import const
 #from longerusername import MAX_USERNAME_LENGTH
 import logging
-import urllib
+import urllib.request, urllib.parse, urllib.error
 
+def get_next_url_from_jwt(next_jwt, default=None):
+    """Returns the validated next_url parameter"""
+    try:
+        jwt_data = decode_jwt(next_jwt)
+    except Exception as error:
+        logging.critical(
+            'Error decoding next_url jwt error="%s" token="%s"',
+            error, next_jwt
+        )
+        return default or reverse('index')
 
-def clean_next(next_url, default=None):
+    next_url = jwt_data.get('next_url')
     if next_url is None or not next_url.startswith('/'):
         return default or reverse('index')
     if isinstance(next_url, str):
-        next_url = unicode(urllib.unquote(next_url), 'utf-8', 'replace')
+        next_url = urllib.parse.unquote(next_url)
     return next_url.strip()
 
 def get_error_list(form_instance):
     """return flat list of error values for the form"""
-    lists = form_instance.errors.values()
+    lists = list(form_instance.errors.values())
     errors = list()
     for error_list in lists:
         errors.extend(list(error_list))
     return errors
 
 def get_next_url(request, default=None):
-    return clean_next(request.REQUEST.get('next'), default)
+    """Returns the next url from the jwt token"""
+    next_jwt = getattr(request, request.method).get('next')
+    if next_jwt:
+        return get_next_url_from_jwt(next_jwt, default)
+    return default or reverse('questions')
+
+def get_next_jwt(request, default=None):
+    """Returns jwt token with the validated next_url parameter
+    coming from the request.
+    The point of this is to authenticate the value using the SECRET_KEY.
+    """
+    default = default or reverse('questions')
+    return encode_jwt({'next_url': get_next_url(request, default)})
 
 def get_db_object_or_404(params):
     """a utility function that returns an object
@@ -42,7 +66,7 @@ def get_db_object_or_404(params):
     try:
         model_name = params['model_name']
         assert(model_name=='Group')
-        model = models.get_model(model_name)
+        model = apps.get_model('askbot', model_name)
         obj_id = forms.IntegerField().clean(params['object_id'])
         return get_object_or_404(model, id=obj_id)
     except Exception:
@@ -57,9 +81,9 @@ def format_errors(error_list):
     a string.
     """
     if len(error_list) == 1:
-        return unicode(error_list[0])
+        return str(error_list[0])
     else:
-        return unicode(error_list)
+        return str(error_list)
 
 class StrippedNonEmptyCharField(forms.CharField):
     def clean(self, value):
@@ -79,13 +103,13 @@ class NextUrlField(forms.CharField):
             required = False
         )
     def clean(self,value):
-        return clean_next(value)
+        return get_next_url_from_jwt(value)
 
 login_form_widget_attrs = { 'class': 'required login' }
 
 class UserNameField(StrippedNonEmptyCharField):
-    RESERVED_NAMES = (u'fuck', u'shit', u'ass', u'sex', u'add',
-                       u'edit', u'save', u'delete', u'manage', u'update', 'remove', 'new')
+    RESERVED_NAMES = ('fuck', 'shit', 'ass', 'sex', 'add',
+                       'edit', 'save', 'delete', 'manage', 'update', 'remove', 'new')
     def __init__(
         self,
         db_model=User,

@@ -1,8 +1,9 @@
-import askbot
+from django.conf import settings as django_settings
+from django.urls import reverse
+from django.utils import translation
 from askbot.tests.utils import AskbotTestCase
 from askbot.conf import settings as askbot_settings
-from django.conf import settings as django_settings
-from django.utils import translation
+import askbot
 
 class SettingsTests(AskbotTestCase):
     def setUp(self):
@@ -48,3 +49,14 @@ class SettingsTests(AskbotTestCase):
         self.assertSettingEquals('MIN_REP_TO_VOTE_UP', 500)
 
         askbot_settings.update('MIN_REP_TO_VOTE_UP', backup)
+
+    def test_settings_get(self):
+        self.admin = self.create_user('staff')
+        self.admin.is_superuser = True
+        self.admin.save()
+        self.client.login(user_id=self.admin.id, method='force')
+        response = self.client.get(reverse('satchmo_site_settings'))
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.headers['Location'], '/settings/MIN_REP/')
+        response = self.client.get(reverse('satchmo_site_settings') + 'MIN_REP/')
+        self.assertEqual(response.status_code, 200)

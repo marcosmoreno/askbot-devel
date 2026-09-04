@@ -1,3 +1,4 @@
+
 from xml.etree import ElementTree as et
 import sys
 import re
@@ -18,7 +19,7 @@ types = {
    'string':'models.CharField',
    'text':'models.TextField',
    'int':'models.IntegerField',
-   'boolean':'models.NullBooleanField',
+   'boolean':'models.BooleanField',
    'dateTime':'models.DateTimeField',
    'base64Binary':'models.TextField',
    'double':'models.IntegerField',
@@ -45,7 +46,7 @@ def get_table_name(name):
         out += singular(name)
     else:
         bits = name.split('2')
-        bits = map(singular, bits)
+        bits = list(map(singular, bits))
         out += '2'.join(bits)
     return out
 
@@ -181,7 +182,7 @@ def parse_value(input, field_object):
             id = int(input)
         except:
             raise Exception('non-numeric foreign key %s' % input)
-        related_model = field_object.rel.to
+        related_model = field_object.remove_field.to
         try:
             return related_model.objects.get(id=id)
         except related_model.DoesNotExist:
@@ -209,7 +210,7 @@ def parse_value(input, field_object):
         except:
             raise Exception('datetime expected "%s" found' % input)
 
-print 'from django.db import models'
+print('from django.db import models')
 for file in sys.argv:
     if '.xsd' in file:
         tname = os.path.basename(file).replace('.xsd','')
@@ -222,4 +223,4 @@ for file in sys.argv:
             field = make_field_from_xml_tree(col)
             if field:
                 model.add_field(field)
-        print model
+        print(model)

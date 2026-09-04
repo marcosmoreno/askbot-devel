@@ -17,24 +17,21 @@ That is the reason for having two types of methods here:
 * celery tasks - shells that reconstitute the necessary ORM
   objects and call the base methods
 """
-import logging
-import sys
+import json
+import os
 import traceback
 import uuid
 
 from django.contrib.contenttypes.models import ContentType
-from django.template import Context
-from django.template.loader import get_template
-from django.utils.translation import ugettext as _
+from django.core.management import call_command
+from django.utils.translation import gettext as _
 from django.utils.translation import activate as activate_language
-import simplejson
 
-from celery.decorators import task
+from celery import shared_task
 from celery.utils.log import get_task_logger
 
 from askbot.conf import settings as askbot_settings
 from askbot import const
-from askbot import mail
 from askbot.mail.messages import (
                         InstantEmailAlert,
                         ApprovedPostNotification,
@@ -48,54 +45,90 @@ from askbot.models import (
     User,
     ReplyAddress,
 )
+from askbot.models.user import get_invited_moderators
 from askbot.models.badges import award_badges_signal
 from askbot import exceptions as askbot_exceptions
 from askbot.utils.twitter import Twitter
+from askbot.spam_checker.akismet_spam_checker import akismet_submit_spam
+from askbot.utils.debug_logging import log_instant_email, log_instant_email_error
 
 
 logger = get_task_logger(__name__)
 
 
 # TODO: Make exceptions raised inside record_post_update_celery_task() ...
-#       ... propagate upwards to test runner, if only CELERY_ALWAYS_EAGER = True
+#       ... propagate upwards to test runner, if only CELERY_TASK_ALWAYS_EAGER = True
 #       (i.e. if Celery tasks are not deferred but executed straight away)
-@task(ignore_result=True)
+@shared_task(ignore_result=True)
 def tweet_new_post_task(post_id):
     try:
         twitter = Twitter()
-    except:
+    except: # pylint: disable=bare-except
         return
 
     post = Post.objects.get(id=post_id)
 
     is_mod = post.author.is_administrator_or_moderator()
     if is_mod or post.author.reputation > askbot_settings.MIN_REP_TO_TWEET_ON_OTHERS_ACCOUNTS:
-        tweeters = User.objects.filter(social_sharing_mode=const.SHARE_EVERYTHING)
+        tweeters = User.objects.filter(askbot_profile__social_sharing_mode=const.SHARE_EVERYTHING)
         tweeters = tweeters.exclude(id=post.author.id)
         access_tokens = tweeters.values_list('twitter_access_token', flat=True)
     else:
-        access_tokens = list()
+        access_tokens = []
 
     tweet_text = post.as_tweet()
 
     for raw_token in access_tokens:
-        token = simplejson.loads(raw_token)
+        token = json.loads(raw_token)
         twitter.tweet(tweet_text, access_token=token)
 
     if post.author.social_sharing_mode != const.SHARE_NOTHING:
-        token = simplejson.loads(post.author.twitter_access_token)
+        token = json.loads(post.author.twitter_access_token)
         twitter.tweet(tweet_text, access_token=token)
 
 
-@task(ignore_result=True)
+@shared_task(ignore_result=True)
+def submit_spam_posts_to_akismet(post_ids):
+    posts = Post.objects.filter(pk__in=post_ids)
+    # todo: save user agent in the revisions, using a fixed record
+    # here because there is nothing better at the moment
+    user_agent = 'Mozilla/5.0 (Windows NT 6.0; Win64; x64)'
+    for post in posts:
+        text = post.get_text_content()
+        ip_addr = post.revisions.all()[0].ip_addr
+        akismet_submit_spam(text,
+                            ip_addr=ip_addr,
+                            user_agent=user_agent,
+                            username=post.author.username,
+                            email=post.author.email)
+
+
+@shared_task(ignore_result=True)
+def export_user_data(user_id):
+    """Exports user data by ID"""
+    try:
+        user = User.objects.get(pk=user_id)
+        #1) delete older data exports
+        user.delete_exported_data()
+        #2) export new data
+        file_path = user.suggest_backup_file_path()
+        data_dir = os.path.dirname(file_path)
+        if not os.path.exists(data_dir):
+            os.makedirs(data_dir, 0o700)
+        call_command('askbot_export_user_data', user_id=user_id, file_name=file_path)
+    except User.DoesNotExist: # pylint: disable=no-member
+        return
+
+
+@shared_task(ignore_result=True)
 def delete_update_notifications_task(rev_ids, keep_activity):
     """parameter is list of revision ids"""
     ctype = ContentType.objects.get_for_model(PostRevision)
-    aa = Activity.objects.filter(content_type=ctype, object_id__in=rev_ids)
-    act_ids = aa.values_list('pk', flat=True)
+    acts = Activity.objects.filter(content_type=ctype, object_id__in=rev_ids)
+    act_ids = acts.values_list('pk', flat=True)
 
     # 2) Find notifications related to found activities
-    notifs = ActivityAuditStatus.objects.filter(activity__pk__in=act_ids)
+    notifs = ActivityAuditStatus.objects.filter(activity__pk__in=act_ids) # pylint: disable=no-member
 
     # 3) Find recipients of notifications
     user_ids = notifs.values_list('user', flat=True).distinct()
@@ -109,12 +142,12 @@ def delete_update_notifications_task(rev_ids, keep_activity):
     else:
         # delete activities and notifications
         # b/c notifications have activity as FK records
-        aa.delete()
+        acts.delete()
 
     for user in users:
         user.update_response_counts()
 
-@task(ignore_result=True)
+@shared_task(ignore_result=True)
 def notify_author_of_published_revision_celery_task(revision_id):
     # TODO: move this to ``askbot.mail`` module
     # for answerable email only for now, because
@@ -122,8 +155,8 @@ def notify_author_of_published_revision_celery_task(revision_id):
 
     try:
         revision = PostRevision.objects.get(pk=revision_id)
-    except PostRevision.DoesNotExist:
-        logger.error("Unable to fetch revision with id %s" % revision_id)
+    except PostRevision.DoesNotExist: # pylint: disable=no-member
+        logger.error("Unable to fetch revision with id %s", revision_id)
         return
 
     activate_language(revision.post.language_code)
@@ -165,10 +198,14 @@ def notify_author_of_published_revision_celery_task(revision_id):
         email.send([revision.author.email])
 
 
-@task(ignore_result=True)
-def record_post_update_celery_task(
+@shared_task(ignore_result=True)
+def record_post_update_celery_task( # pylint: disable=too-many-arguments
         post_id, newly_mentioned_user_id_list=None, updated_by_id=None,
         suppress_email=False, timestamp=None, created=False, diff=None):
+    run_id = uuid.uuid4().hex[:8] if askbot_settings.DEBUG_EMAIL_ALERTS else None
+    log_instant_email(logger, run_id,
+                      'record_post_update_celery_task for post %d, %d newly mentioned users',
+                      post_id, len(newly_mentioned_user_id_list or []))
     # reconstitute objects from the database
     updated_by = User.objects.get(id=updated_by_id)
     post = Post.objects.get(id=post_id)
@@ -178,7 +215,8 @@ def record_post_update_celery_task(
     try:
         notify_sets = post.get_notify_sets(
             mentioned_users=newly_mentioned_users,
-            exclude_list=[updated_by])
+            exclude_list=[updated_by],
+            run_id=run_id)
 
         activity_type = post.get_updated_activity_type(created)
         post.issue_update_notifications(
@@ -187,12 +225,13 @@ def record_post_update_celery_task(
             activity_type=activity_type,
             suppress_email=suppress_email,
             timestamp=timestamp,
-            diff=diff)
-    except Exception:
-        logger.error(unicode(traceback.format_exc()).encode('utf-8'))
+            diff=diff,
+            run_id=run_id)
+    except Exception: # pylint: disable=broad-except
+        logger.error(str(traceback.format_exc()).encode('utf-8'))
 
 
-@task(ignore_result=True)
+@shared_task(ignore_result=True)
 def record_question_visit(
         language_code=None, question_post_id=None, update_view_count=False,
         user_id=None):
@@ -205,8 +244,8 @@ def record_question_visit(
     # 1) maybe update the view count
     try:
         question_post = Post.objects.get(id=question_post_id)
-    except Post.DoesNotExist:
-        logger.error("Unable to fetch post with id %s" % question_post_id)
+    except Post.DoesNotExist: # pylint: disable=no-member
+        logger.error("Unable to fetch post with id %s", question_post_id)
         return
 
     if update_view_count and question_post.thread_id:
@@ -219,22 +258,37 @@ def record_question_visit(
     user = User.objects.get(id=user_id)
 
     # 2) question view count per user and clear response displays
-    if user.is_authenticated():
+    if user.is_authenticated:
         # get response notifications
         user.visit_question(question_post)
 
-    # 3) send award badges signal for any badges
-    # that are awarded for question views
-    award_badges_signal.send(
-        None, event='view_question', actor=user,
-        context_object=question_post)
+    #3) send award badges signal for any badges
+    #that are awarded for question views
+    award_badges_signal.send(None,
+                             event='view_question',
+                             actor=user,
+                             context_object=question_post)
 
-
-@task()
+@shared_task(ignore_result=True)
 def send_instant_notifications_about_activity_in_post(
-        activity_id=None, post_id=None, recipients=None):
+        activity_id=None, post_id=None, recipient_ids=None,
+        include_invited_moderators=False, run_id=None):
 
-    if recipients is None:
+    if run_id is None and askbot_settings.DEBUG_EMAIL_ALERTS:
+        run_id = uuid.uuid4().hex[:8]
+
+    if recipient_ids:
+        recipients = set(User.objects.filter(pk__in=recipient_ids))
+    else:
+        recipients = set()
+
+    if include_invited_moderators:
+        recipients.update(get_invited_moderators())
+
+    if len(recipients) == 0:
+        log_instant_email(logger, run_id,
+                          'no recipients for activity %d, post %d',
+                          activity_id, post_id)
         return
 
     acceptable_types = const.RESPONSE_ACTIVITY_TYPES_FOR_INSTANT_NOTIFICATIONS
@@ -242,28 +296,35 @@ def send_instant_notifications_about_activity_in_post(
         update_activity = Activity.objects\
             .filter(activity_type__in=acceptable_types)\
             .get(id=activity_id)
-    except Activity.DoesNotExist:
-        logger.error("Unable to fetch activity with id %s" % post_id)
+    except Activity.DoesNotExist: # pylint: disable=no-member
+        log_instant_email_error(logger, run_id,
+                                'unable to fetch activity with id %s', activity_id)
         return
 
     try:
         post = Post.objects.get(id=post_id)
-    except Post.DoesNotExist:
-        logger.error("Unable to fetch post with id %s" % post_id)
+    except Post.DoesNotExist: # pylint: disable=no-member
+        log_instant_email_error(logger, run_id,
+                                'unable to fetch post with id %s', post_id)
         return
 
     if not post.is_approved():
+        log_instant_email(logger, run_id,
+                          'post %d not approved, skipping notifications', post.id)
         return
 
-    if logger.getEffectiveLevel() <= logging.DEBUG:
-        log_id = uuid.uuid1()
-        message = 'email-alert %s, logId=%s' % (post.get_absolute_url(), log_id)
-        logger.debug(message)
-    else:
-        log_id = None
+    activity_label = const.get_activity_type_display(update_activity.activity_type)
+    log_instant_email(logger, run_id,
+                      'sending to %d recipients for %s, activity_type=%s',
+                      len(recipients), post.get_absolute_url(), activity_label)
+
+    sent_count = 0
+    failed_count = 0
+    skipped_count = 0
 
     for user in recipients:
         if user.is_blocked():
+            skipped_count += 1
             continue
 
         activate_language(post.language_code)
@@ -276,9 +337,15 @@ def send_instant_notifications_about_activity_in_post(
         })
         try:
             email.send([user.email])
-        except askbot_exceptions.EmailNotSent, error:
-            logger.debug(
-                '%s, error=%s, logId=%s' % (user.email, error, log_id)
-            )
+        except Exception as error:
+            failed_count += 1
+            log_instant_email_error(logger, run_id,
+                                    'failed to send to %s, error=%s',
+                                    user.email, error)
         else:
-            logger.debug('success %s, logId=%s' % (user.email, log_id))
+            sent_count += 1
+            log_instant_email(logger, run_id, 'sent to %s', user.email)
+
+    log_instant_email(logger, run_id,
+                      'delivery summary — sent %d, failed %d, skipped %d out of %d total',
+                      sent_count, failed_count, skipped_count, len(recipients))

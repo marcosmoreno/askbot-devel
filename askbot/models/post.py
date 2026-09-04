@@ -1,49 +1,48 @@
 from collections import defaultdict
-import datetime
 import operator
 import logging
+from urllib.parse import quote as django_urlquote
 
-from django.contrib.sitemaps import ping_google
-from django.utils import html
 from django.conf import settings as django_settings
 from django.contrib.auth.models import User
-from django.core import urlresolvers
 from django.db import models
 from django.utils import html as html_utils
 from django.utils import timezone
 from django.utils.text import Truncator
 from django.utils.translation import activate as activate_language
 from django.utils.translation import get_language
-from django.utils.translation import ugettext as _
-from django.utils.http import urlquote as django_urlquote
+from django.utils.translation import gettext as _
 from django.core import exceptions as django_exceptions
 from django.core import cache
 from django.core.exceptions import ValidationError
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.contrib.contenttypes.models import ContentType
 
 import askbot
 
 from askbot import signals
-from askbot.utils.loading import load_module, load_plugin
+from askbot.utils.loading import load_plugin, load_function
 from askbot.utils.slug import slugify
 from askbot import const
-from askbot.models.tag import Tag, MarkedTag
+from askbot.models.tag import MarkedTag
 from askbot.models.tag import tags_match_some_wildcard
 from askbot.models.fields import LanguageCodeField
 from askbot.conf import settings as askbot_settings
 from askbot import exceptions
 from askbot.utils import markup
 from askbot.utils.html import (get_word_count, has_moderated_tags,
-                               moderate_tags, sanitize_html, strip_tags,
+                               moderate_tags, sanitize_html,
                                site_url)
-from askbot.utils.transaction import defer_celery_task
+from askbot.utils.celery_utils import defer_celery_task
+from askbot.utils.debug_logging import log_instant_email
 from askbot.models.base import (AnonymousContent, BaseQuerySetManager,
                                 DraftContent)
 
 # TODO: maybe merge askbot.utils.markup and forum.utils.html
 from askbot.utils.diff import textDiff as htmldiff
-from askbot.search import mysql
+#from askbot.search import mysql
+
+logger = logging.getLogger(__name__)
 
 
 def default_html_moderator(post):
@@ -83,8 +82,8 @@ def default_html_moderator(post):
 
 
 class PostToGroup(models.Model):
-    post = models.ForeignKey('Post')
-    group = models.ForeignKey('Group')
+    post = models.ForeignKey('Post', on_delete=models.CASCADE)
+    group = models.ForeignKey('Group', on_delete=models.CASCADE)
 
     class Meta:
         unique_together = ('post', 'group')
@@ -101,14 +100,15 @@ class PostQuerySet(models.query.QuerySet):
     # belong to Thread manager or Query set.
     def get_for_user(self, user):
         from askbot.models.user import Group
-        if askbot_settings.GROUPS_ENABLED:
-            if user is None or user.is_anonymous():
-                groups = [Group.objects.get_global_group()]
-            else:
-                groups = user.get_groups()
-            return self.filter(groups__in=groups).distinct()
-        else:
+        if not askbot_settings.GROUPS_ENABLED:
             return self
+
+        if user is None or user.is_anonymous:
+            groups = [Group.objects.get_global_group()]
+        else:
+            groups = user.get_groups()
+
+        return self.filter(groups__in=groups).distinct()
 
     def get_by_text_query(self, search_query):
         """returns a query set of questions,
@@ -236,18 +236,13 @@ class PostManager(BaseQuerySetManager):
             post.last_edited_at = added_at
             post.wikified_at = added_at
 
-        # possibly modify the is_private, if one of the groups
-        # mandates explicit publishing of the posts
-        is_private = is_private or \
-            (thread and thread.requires_response_moderation(author))
-
         post.save()  # saved so that revision can have post_id
 
         revision = post.add_revision(
             author=author,
             revised_at=added_at,
             text=text,
-            comment=unicode(const.POST_STATUS['default_version']),
+            comment=str(const.POST_STATUS['default_version']),
             by_email=by_email,
             ip_addr=ip_addr
         )
@@ -296,19 +291,15 @@ class PostManager(BaseQuerySetManager):
     def precache_comments(self, for_posts, visitor):
         """
         Fetches comments for given posts, and stores them in post._cached_comments
-        Additionally, annotates posts with ``upvoted_by_user`` parameter, if visitor is logged in
-
+        If visitor is authenticated, annotatets posts with ``upvoted_by_user`` parameter.
+        If visitor is authenticated, adds own comments that are in moderation.
         """
-        qs = Post.objects.get_comments().filter(parent__in=for_posts)\
+        qs = Post.objects.get_comments()\
+            .filter(parent__in=for_posts)\
             .select_related('author')
 
-        comments_reversed = askbot_settings.COMMENTS_REVERSED
-
-        if visitor.is_anonymous():
-            if comments_reversed:
-                comments = list(qs.order_by('-added_at'))
-            else:
-                comments = list(qs.order_by('added_at'))
+        if visitor.is_anonymous:
+            comments = list(qs.order_by('added_at'))
         else:
             upvoted_by_user = list(qs.filter(votes__user=visitor).distinct())
             not_upvoted_by_user = list(qs.exclude(votes__user=visitor).distinct())
@@ -317,16 +308,22 @@ class PostManager(BaseQuerySetManager):
                 c.upvoted_by_user = 1  # numeric value to maintain compatibility with previous version of this code
 
             comments = upvoted_by_user + not_upvoted_by_user
-            comments.sort(key=operator.attrgetter('added_at'), reverse=comments_reversed)
+            comments.sort(key=operator.attrgetter('added_at'))
+
+        # filter out comments that user should not see
+        premoderation = askbot_settings.CONTENT_MODERATION_MODE == 'premoderation'
+        if premoderation and visitor.is_authenticated:
+            comments = [comment for comment in comments if (comment.approved or comment.author_id == visitor.pk)]
 
         post_map = defaultdict(list)
         for cm in comments:
             post_map[cm.parent_id].append(cm)
+
         for post in for_posts:
             post.set_cached_comments(post_map[post.id])
 
         # Old Post.get_comment(self, visitor=None) method:
-        #        if visitor.is_anonymous():
+        #        if visitor.is_anonymous:
         #            return self.comments.order_by('added_at')
         #        else:
         #            upvoted_by_user = list(self.comments.filter(votes__user=visitor).distinct())
@@ -357,6 +354,9 @@ class MockPost(object):
     def needs_moderation(self):
         return False
 
+    def get_post_type_display(self):
+        return self.post_type
+
 
 POST_RENDERERS_MAP = django_settings.ASKBOT_POST_RENDERERS
 def get_post_renderer_type(post_type):
@@ -383,18 +383,21 @@ class Post(models.Model):
 
     # Answer or Question for Comment
     parent = models.ForeignKey('Post', blank=True, null=True,
-                               related_name='comments')
+                               related_name='comments',
+                               on_delete=models.CASCADE)
     thread = models.ForeignKey('Thread', blank=True, null=True, default=None,
-                               related_name='posts')
+                               related_name='posts',
+                               on_delete=models.CASCADE)
     # nullable b/c we have to first save post and then add link to current
     # revision (which has a non-nullable fk to post)
     current_revision = models.ForeignKey('PostRevision', blank=True, null=True,
-                                         related_name='rendered_posts')
+                                         related_name='rendered_posts',
+                                         on_delete=models.CASCADE)
     # used for group-private posts
     groups = models.ManyToManyField('Group', through='PostToGroup',
                                     related_name='group_posts')
 
-    author = models.ForeignKey(User, related_name='posts')
+    author = models.ForeignKey(User, related_name='posts', on_delete=models.CASCADE)
     added_at = models.DateTimeField(default=timezone.now)
 
     # endorsed == accepted as best in the case of answer
@@ -403,7 +406,8 @@ class Post(models.Model):
     # note: accepted answer is also denormalized on the Thread model
     endorsed = models.BooleanField(default=False, db_index=True)
     endorsed_by = models.ForeignKey(User, null=True, blank=True,
-                                    related_name='endorsed_posts')
+                                    related_name='endorsed_posts',
+                                    on_delete=models.CASCADE)
     endorsed_at = models.DateTimeField(null=True, blank=True)
 
     # denormalized data: the core approval of the posts is made
@@ -414,14 +418,21 @@ class Post(models.Model):
     deleted = models.BooleanField(default=False, db_index=True)
     deleted_at = models.DateTimeField(null=True, blank=True)
     deleted_by = models.ForeignKey(User, null=True, blank=True,
-                                   related_name='deleted_posts')
+                                   related_name='deleted_posts',
+                                   on_delete=models.CASCADE)
+
+    marked_as_spam = models.BooleanField(default=False, db_index=True)
+    marked_as_spam_by = models.ForeignKey(User, null=True, blank=True,
+                                          on_delete=models.SET_NULL)
+    marked_as_spam_at = models.DateTimeField(null=True, blank=True)
 
     wiki = models.BooleanField(default=False)
     wikified_at = models.DateTimeField(null=True, blank=True)
 
     locked = models.BooleanField(default=False)
     locked_by = models.ForeignKey(User, null=True, blank=True,
-                                  related_name='locked_posts')
+                                  related_name='locked_posts',
+                                  on_delete=models.CASCADE)
     locked_at = models.DateTimeField(null=True, blank=True)
 
     points = models.IntegerField(default=0, db_column='score')
@@ -432,7 +443,7 @@ class Post(models.Model):
     offensive_flag_count = models.SmallIntegerField(default=0)
 
     last_edited_at = models.DateTimeField(null=True, blank=True)
-    last_edited_by = models.ForeignKey(User, null=True, blank=True, related_name='last_edited_posts')
+    last_edited_by = models.ForeignKey(User, null=True, blank=True, related_name='last_edited_posts', on_delete=models.CASCADE)
 
     html = models.TextField(null=True)  # html rendition of the latest revision
     text = models.TextField(null=True)  # denormalized copy of latest revision
@@ -453,6 +464,7 @@ class Post(models.Model):
     objects = PostManager()
 
     class Meta:
+        ordering = [ '-last_edited_at', '-points' ]
         app_label = 'askbot'
         db_table = 'askbot_post'
 
@@ -585,10 +597,10 @@ class Post(models.Model):
         is_private = kwargs.pop('is_private', False)
         group_id = kwargs.pop('group_id', None)
 
-        # this save must precede saving the mention activity
-        # as well as assigning groups to the post
-        # because generic relation needs primary key of the related object
-        super(self.__class__, self).save(**kwargs)
+        #this save must precede saving the mention activity
+        #as well as assigning groups to the post
+        #because generic relation needs primary key of the related object
+        super(Post, self).save(**kwargs)
 
         # TODO: move this group stuff out of this function
         if self.is_comment():
@@ -614,14 +626,17 @@ class Post(models.Model):
 
         timestamp = self.get_time_of_last_edit()
 
-        try:
-            from askbot.conf import settings as askbot_settings
-            if askbot_settings.GOOGLE_SITEMAP_CODE != '':
-                ping_google()
-        except Exception:
-            logging.debug('cannot ping google - did you register with them?')
-
         return {'diff': diff, 'newly_mentioned_users': newly_mentioned_users}
+
+    def render(self):
+        """Rerenders post html and snippet, no saving."""
+        self.html = self.parse_post_text()['html']
+        self.summary = self.get_snippet()
+
+    def recount_comments(self):
+        """Updates denormalized value `Post.comment_count` according to the
+        number of comments in the database"""
+        self.comment_count = self.comments.filter(deleted=False, approved=True).count()
 
     def is_question(self):
         return self.post_type == 'question'
@@ -641,6 +656,33 @@ class Post(models.Model):
     def is_reject_reason(self):
         return self.post_type == 'reject_reason'
 
+    def get_comments_count(self, user):
+        """Returns number of comments under teh post that can be
+        seen by the user"""
+        if not user or user.is_anonymous:
+            return self.comment_count
+
+        return self.comment_count + int(self.has_moderated_comment(user))
+
+    def get_flag_activity_object(self, user):
+        """Returns flag activity object, preferrably initialized by the user,
+        If user is admin or mod, return any flag object.
+        Raises an exception, if object does not exist.
+        """
+        from askbot.models import Activity
+        try:
+            return Activity.objects.get(object_id=self.pk,
+                                        content_type=ContentType.objects.get_for_model(self),
+                                        user_id=user.pk,
+                                        activity_type=const.TYPE_ACTIVITY_MARK_OFFENSIVE)
+        except Activity.DoesNotExist:
+            if not user.is_administrator_or_moderator:
+                raise
+
+            return Activity.objects.get(object_id=self.pk,
+                                        content_type=ContentType.objects.get_for_model(self),
+                                        activity_type=const.TYPE_ACTIVITY_MARK_OFFENSIVE)
+
     def get_last_edited_date(self):
         """returns date of last edit or date of creation
         if there were no edits"""
@@ -649,7 +691,11 @@ class Post(models.Model):
     def get_latest_revision_diff(self, ins_start=None, ins_end=None,
                                  del_start=None, del_end=None):
         # returns formatted html diff of the latest two revisions
-        revisions = self.revisions.order_by('-id')[:2]
+        revisions = self.revisions.exclude(revision=0).order_by('-id')
+        if revisions.count() < 2:
+            return ''
+
+        revisions = revisions[:2]
         return htmldiff(sanitize_html(revisions[1].html),
                         sanitize_html(revisions[0].html),
                         ins_start=ins_start,
@@ -660,13 +706,23 @@ class Post(models.Model):
     def get_moderators(self):
         """returns query set of users who are site administrators
         and moderators"""
-        user_filter = models.Q(is_superuser=True) | models.Q(askbot_profile__status='m')
-        if askbot_settings.GROUPS_ENABLED:
-            post_groups = self.groups.all()
-            user_filter = user_filter & models.Q(
-                                        group_membership__group__in=post_groups
-                                    )
-        return User.objects.filter(user_filter).distinct()
+        #if askbot_settings.GROUPS_ENABLED:
+        #    post_groups = self.groups.all()
+        #    user_filter = user_filter & models.Q(
+        #                                group_membership__group__in=post_groups
+        #                            )
+        return User.objects.filter(askbot_profile__status__in=('m', 'd')).distinct()
+
+    def get_post_type_display(self):
+        """Returns localized post type"""
+        if self.is_comment():
+            return _('comment')
+        if self.is_answer():
+            return _('answer')
+        if self.is_question():
+            return _('question')
+
+        return _('piece of content')
 
     def get_previous_answer(self, user=None):
         """returns a previous answer to a given answer;
@@ -701,21 +757,95 @@ class Post(models.Model):
         except KeyError:
             raise NotImplementedError
 
-        return load_module(renderer_path)
+        return load_function(renderer_path)
+
+    def get_context_for_sidebar(self, user):
+        """Returns template context for the question page stats sidebar"""
+        context = {}
+        sidebar_meta_enabled = askbot_settings.SIDEBAR_QUESTION_SHOW_META
+        domains_enabled = django_settings.ASKBOT_ANALYTICS_EMAIL_DOMAIN_ORGANIZATIONS_ENABLED
+        groups_enabled = askbot_settings.GROUPS_ENABLED
+        # analytics needs multiple configs - the list of two conditions is incomplete
+        analytics_enabled = groups_enabled and domains_enabled
+        # covers the cases of "analytics disabled" and/or sidebar meta info disabled
+        if user.is_anonymous or not (analytics_enabled and sidebar_meta_enabled):
+            return {
+                'show_basic_question_stats': sidebar_meta_enabled,
+                'show_analytics_question_stats': False,
+                'show_links_to_analytics': False,
+                'views_per_segment_name': []
+            }
+
+        # both analytics and sidebar meta are enabled, so we collect all we need for display
+        # for each named segment, get views of this question [{"segment_name": <string>, views_count": <num>},]
+        from askbot.models.analytics import Event
+        from askbot.utils.analytics_utils import get_analytics_default_segment_config
+        named_segment_group_ids = []
+        for named_segment in django_settings.ASKBOT_ANALYTICS_NAMED_SEGMENTS:
+            named_segment_group_ids.extend(named_segment['group_ids'])
+
+        is_mod = user.is_admin_or_mod()
+        user_group_ids = [group.id for group in user.get_groups(used_for_analytics = True)]
+        can_see_light_analytics = is_mod or bool(set(named_segment_group_ids) & set(user_group_ids))
+
+        # if the user does not belong to any named segment groups, they cannot se per segment analytics
+        # here we shortcut and do not collect the per-segment analytics
+        if not can_see_light_analytics:
+            return {
+                'show_basic_question_stats': True,
+                'show_analytics_question_stats': False,
+                'views_per_segment_name': [],
+                'show_links_to_analytics': False
+            }
+
+        views_per_segment_name = []
+        for named_segment in django_settings.ASKBOT_ANALYTICS_NAMED_SEGMENTS:
+            views_per_segment_name.append({
+                'segment_name': named_segment['name'],
+                'views_count': Event.objects.get_question_visits_count_by_group_ids(self, named_segment['group_ids'])
+            })
+        # get stats for teh default segment
+        views_per_segment_name.append({
+            'segment_name': get_analytics_default_segment_config()['name'],
+            'views_count': Event.objects.get_question_visits_count_by_default_segment(self)
+        })
+
+        return {
+            'show_basic_question_stats': False,
+            'show_analytics_question_stats': True,
+            'views_per_segment_name': views_per_segment_name,
+            'show_links_to_analytics': is_mod
+        }
 
     def has_group(self, group):
         """true if post belongs to the group"""
         return self.groups.filter(id=group.id).exists()
 
+    def has_moderated_comment(self, user):
+        """`True` if post has moderated comment authored by user"""
+        if not user:
+            return False
+
+        if user.is_anonymous:
+            return False
+
+        cached_comments = getattr(self, '_cached_comments', None)
+        if cached_comments:
+            for comment in cached_comments:
+                if comment.author_id == user.pk:
+                    if not comment.approved:
+                        return True
+            return False
+
+        return Post.objects.filter(
+            parent=self,
+            post_type='comment',
+            author=user,
+            approved=False
+        ).exists()
+
     def add_to_groups(self, groups):
         """associates post with groups"""
-        # this is likely to be temporary - we add
-        # vip groups to the list behind the scenes.
-        groups = list(groups)
-        # add moderator groups to the post implicitly
-        from askbot.models.user import Group
-        vips = Group.objects.filter(is_vip=True)
-        groups.extend(vips)
         # TODO: use bulk-creation
         for group in groups:
             PostToGroup.objects.get_or_create(post=self, group=group)
@@ -736,7 +866,7 @@ class Post(models.Model):
 
     def issue_update_notifications(self, updated_by=None, notify_sets=None,
                                    activity_type=None, suppress_email=False,
-                                   timestamp=None, diff=None):
+                                   timestamp=None, diff=None, run_id=None):
         """Called when a post is updated. Arguments:
 
         * ``notify_sets`` - result of ``Post.get_notify_sets()`` method
@@ -747,6 +877,12 @@ class Post(models.Model):
         * sends email alerts to all subscribers to the post
         """
         assert(activity_type is not None)
+        activity_label = const.get_activity_type_display(activity_type)
+        log_instant_email(logger, run_id,
+                          'issue_update_notifications for post %d, '
+                          'activity_type=%s, updated_by=%d',
+                          self.id, activity_label, updated_by.id)
+
         if diff:
             summary = diff
         else:
@@ -779,35 +915,67 @@ class Post(models.Model):
             user.update_response_counts()
 
         # shortcircuit if the email alerts are disabled
-        if suppress_email or not askbot_settings.ENABLE_EMAIL_ALERTS:
+        if suppress_email:
+            log_instant_email(logger, run_id,
+                              'email suppressed by caller for post %d', self.id)
+            return
+        if not askbot_settings.ENABLE_EMAIL_ALERTS:
+            log_instant_email(logger, run_id, 'email alerts globally disabled')
             return
 
         if not askbot_settings.INSTANT_EMAIL_ALERT_ENABLED:
+            log_instant_email(logger, run_id, 'instant email alerts disabled')
             return
 
         # TODO: fix this temporary spam protection plug
         if askbot_settings.MIN_REP_TO_TRIGGER_EMAIL:
             if not (updated_by.is_administrator() or updated_by.is_moderator()):
                 if updated_by.reputation < askbot_settings.MIN_REP_TO_TRIGGER_EMAIL:
-                    notify_sets['for_email'] = \
-                        [u for u in notify_sets['for_email'] if u.is_administrator()]
+                    original_count = len(notify_sets['for_email'])
+                    for_email = [u for u in notify_sets['for_email'] if u.is_administrator()]
+                    notify_sets['for_email'] = for_email
+                    log_instant_email(logger, run_id,
+                                      'MIN_REP filter reduced recipients '
+                                      'from %d to %d for post %d',
+                                      original_count, len(for_email), self.id)
 
-        if not django_settings.CELERY_ALWAYS_EAGER:
+        if not getattr(django_settings, 'CELERY_TASK_ALWAYS_EAGER', False):
             cache_key = 'instant-notification-%d-%d' % (self.thread.id, updated_by.id)
             if cache.cache.get(cache_key):
+                log_instant_email(logger, run_id,
+                                  'notification throttled by cache for thread %d',
+                                  self.thread.id)
                 return
             cache.cache.set(cache_key, True, django_settings.NOTIFICATION_DELAY_TIME)
 
         from askbot.tasks import send_instant_notifications_about_activity_in_post
-        defer_celery_task(
-            send_instant_notifications_about_activity_in_post,
-            args=(
-                update_activity.pk,
-                self.id,
-                notify_sets['for_email']
-            ),
-            countdown=django_settings.NOTIFICATION_DELAY_TIME
-        )
+        from askbot.utils.lists import batch_size as make_batches
+        recipient_ids = [user.id for user in notify_sets['for_email']]
+        log_instant_email(logger, run_id, '%d email recipients for post %d',
+                          len(recipient_ids), self.id)
+        id_batches = make_batches(recipient_ids, const.CELERY_TASK_EMAIL_BATCH_SIZE) if recipient_ids else [[]]
+        if askbot_settings.DEBUG_EMAIL_ALERTS:
+            batch_sizes = [len(b) for b in id_batches]
+            log_instant_email(logger, run_id,
+                              'dispatching %d batches (sizes: %s) for post %d',
+                              len(id_batches), batch_sizes, self.id)
+        for i, batch in enumerate(id_batches):
+            defer_celery_task(
+                send_instant_notifications_about_activity_in_post,
+                args=(
+                    update_activity.pk,
+                    self.id,
+                    batch
+                ),
+                #include invited mods only in the first batch, to avoid multiple emails to mods
+                kwargs={
+                    'include_invited_moderators': (i == 0),
+                    'run_id': run_id
+                },
+                countdown=django_settings.NOTIFICATION_DELAY_TIME
+            )
+        log_instant_email(logger, run_id, 'all %d batches dispatched for post %d',
+                          len(id_batches), self.id)
 
     def delete_update_notifications(self, keep_activity):
         """reverse of issue update notifications
@@ -827,7 +995,7 @@ class Post(models.Model):
         child_rev_ids = set(child_revs.values_list('pk', flat=True))
 
         rev_ids = list(self_rev_ids | child_rev_ids)
-        
+
         from askbot.tasks import delete_update_notifications_task
         task_args = (rev_ids, keep_activity)
         defer_celery_task(delete_update_notifications_task, args=task_args)
@@ -847,11 +1015,11 @@ class Post(models.Model):
                 self.remove_from_groups((global_group,))
         else:
             if self.thread_id and self.is_question() is False:
-                # for thread-related responses we base
+                # for thread-related answers and comments we base
                 # privacy scope on thread + add a personal group
-                personal_group = user.get_personal_group()
+                personal_groups = user.get_groups(private=True)
                 thread_groups = self.thread.get_groups_shared_with()
-                groups = set([personal_group]) | set(thread_groups)
+                groups = set(personal_groups) | set(thread_groups)
             else:
                 groups = user.get_groups(private=True)
 
@@ -877,19 +1045,19 @@ class Post(models.Model):
             # for each revision of other post Ri
             # append content of Ri to R1 and use author
             new_text = orig_text + '\n\n' + rev.text
-            self.apply_edit(
-                edited_by=user,
-                text=new_text,
-                comment=_('merged revision'),
-                by_email=False,
-                edit_anonymously=rev.is_anonymous,
-                suppress_email=True,
-                ip_addr=rev.ip_addr
-            )
+            self.apply_edit(edited_at=timezone.now(),
+                            edited_by=user,
+                            text=new_text,
+                            comment=_('merged revision'),
+                            by_email=False,
+                            edit_anonymously=rev.is_anonymous,
+                            suppress_email=True,
+                            ip_addr=rev.ip_addr)
+
         if post.is_question() or post.is_answer():
             comments = Post.objects.get_comments().filter(parent=post)
             comments.update(parent=self)
-            self.comment_count = self.comments.filter(deleted=False).count()
+            self.recount_comments()
 
         # TODO: implement redirects
         if post.is_question():
@@ -953,7 +1121,7 @@ class Post(models.Model):
 
     def needs_moderation(self):
         # TODO: do we need this, can't we just use is_approved()?
-        return self.is_approved() is False
+        return not self.is_approved()
 
     def get_absolute_url(self, no_slug=False, question_post=None,
                          language=None, thread=None):
@@ -971,18 +1139,18 @@ class Post(models.Model):
             if not question_post:
                 question_post = self.thread._question_post()
             if no_slug:
-                url = u'%(base)s?answer=%(id)d#post-id-%(id)d' % {
-                    'base': urlresolvers.reverse('question', args=[question_post.id]),
+                url = '%(base)s?answer=%(id)d#post-id-%(id)d' % {
+                    'base': reverse('question', args=[question_post.id]),
                     'id': self.id
                 }
             else:
-                url = u'%(base)s%(slug)s/?answer=%(id)d#post-id-%(id)d' % {
-                    'base': urlresolvers.reverse('question', args=[question_post.id]),
+                url = '%(base)s%(slug)s/?answer=%(id)d#post-id-%(id)d' % {
+                    'base': reverse('question', args=[question_post.id]),
                     'slug': django_urlquote(slugify(self.thread.title)),
                     'id': self.id
                 }
         elif self.is_question():
-            url = urlresolvers.reverse('question', args=[self.id])
+            url = reverse('question', args=[self.id])
             if thread:
                 url += django_urlquote(slugify(thread.title)) + '/'
             elif no_slug is False:
@@ -1032,15 +1200,13 @@ class Post(models.Model):
 
         super(Post, self).delete(**kwargs)
 
-    def __unicode__(self):
+    def __str__(self):
         if self.is_question():
             return self.thread.title
         else:
             return self.html
 
     def save(self, *args, **kwargs):
-        if self.is_answer() and self.is_anonymous:
-            raise ValueError('Answer cannot be anonymous!')
         super(Post, self).save(*args, **kwargs)
         if self.is_answer() and 'postgres' in askbot.get_database_engine_name():
             # hit the database to trigger update of full text search vector
@@ -1051,6 +1217,17 @@ class Post(models.Model):
             raise NotImplementedError
         return slugify(self.thread.title)
     slug = property(_get_slug)
+
+    def get_text_content(self, title=None, body_text=None, tags=None):
+        """Returns text content of the post.
+        Parts can be overrridden by the optional parameters.
+        This method was created for purposes of the spam classification"""
+        if self.is_question():
+            title = title or self.thread.title
+            tags = tags or self.thread.tagnames
+            body_text = body_text or self.text
+            return '{}\n\n{}\n\n{}'.format(title, tags, body_text)
+        return body_text or self.text
 
     def get_snippet(self, max_length=None):
         """returns an abbreviated HTML snippet of the content
@@ -1065,15 +1242,12 @@ class Post(models.Model):
         else:
             max_words = int(max_length/5)
 
-        # TODO: truncate so that we have max number of lines
-        # the issue is that code blocks have few words
-        # but very tall, while paragraphs can be dense on words
-        # and fit into fewer lines
-        truncated = Truncator(self.html).words(max_words, truncate=' ...', html=True)
+        from askbot.utils.html import sanitize_html
+        truncated = sanitize_html(Truncator(self.html).words(max_words, truncate=' ...', html=True))
         new_count = get_word_count(truncated)
         orig_count = get_word_count(self.html)
         if new_count + 1 < orig_count:
-            expander = '<span class="expander"> <a>(' + _('more') + ')</a></span>'
+            expander = '<span class="js-expander"> <a>(' + _('more') + ')</a></span>'
             if truncated.endswith('</p>'):
                 # better put expander inside the paragraph
                 snippet = truncated[:-4] + expander + '</p>'
@@ -1081,10 +1255,9 @@ class Post(models.Model):
                 snippet = truncated + expander
             # it is important to have div here, so that we can make
             # the expander work
-            from askbot.utils.html import sanitize_html
-            return sanitize_html('<div class="snippet">' + snippet + '</div>')
-        else:
-            return self.html
+            return '<div class="js-snippet">' + snippet + '</div>'
+
+        return self.html
 
     def filter_authorized_users(self, candidates):
         """returns list of users who are allowed to see this post"""
@@ -1128,10 +1301,15 @@ class Post(models.Model):
             self._cached_comments = list()
             return self._cached_comments
 
-    def add_cached_comment(self, comment):
+    def add_cached_comment(self, comment): #pylint: disable=missing-docstring
         comments = self.get_cached_comments()
         if comment not in comments:
             comments.append(comment)
+
+        def get_timestamp(item): #pylint: disable=missing-docstring
+            return item.added_at
+
+        self.set_cached_comments(sorted(comments, key=get_timestamp))
 
     def reverse_cached_comments(self):
         self.get_cached_comments().reverse()
@@ -1154,7 +1332,7 @@ class Post(models.Model):
                                                 ip_addr=ip_addr,
                                             )
         if comment_post.is_approved():
-            self.comment_count = self.comment_count + 1
+            self.recount_comments()
             self.save()
 
         if askbot_settings.COMMENT_EDITING_BUMPS_THREAD:
@@ -1190,13 +1368,16 @@ class Post(models.Model):
                                         tag__name__in=tag_names,
                                         tag__language_code=get_language(),
                                         reason=tag_mark_reason)
+
+        # iterator here is not saving memory on the final set, but saves ram in the ORM query set cache
+        # so using .iterator() is valuable; Fixing it further would require rearchitecting this portiion.
         subscribers = set(
             user_set_getter(
                 tag_selections__in=tag_selections
             ).filter(
                 askbot_profile__email_tag_filter_strategy=email_tag_filter_strategy,
                 notification_subscriptions__in=subscription_records
-            )
+            ).select_related('askbot_profile').iterator(chunk_size=500)
         )
 
         # part 2 - find users who follow or not ignore tags via wildcard selections
@@ -1225,8 +1406,8 @@ class Post(models.Model):
                 askbot_profile__email_tag_filter_strategy=email_tag_filter_strategy
             ).exclude(
                 **empty_wildcard_filter  # need this to limit size of the loop
-            )
-            for potential_subscriber in potential_wildcard_subscribers:
+            ).select_related('askbot_profile')
+            for potential_subscriber in potential_wildcard_subscribers.iterator(chunk_size=500):
                 wildcard_tags = getattr(
                     potential_subscriber,
                     wildcard_tags_attribute
@@ -1237,7 +1418,7 @@ class Post(models.Model):
 
         return subscribers
 
-    def get_global_instant_notification_subscribers(self):
+    def get_global_instant_notification_subscribers(self, run_id=None):
         """returns a set of subscribers to post according to tag filters
         both - subscribers who ignore tags or who follow only
         specific tags
@@ -1260,8 +1441,8 @@ class Post(models.Model):
             models.Q(askbot_profile__email_tag_filter_strategy=const.INCLUDE_ALL) &
             models.Q(notification_subscriptions__feed_type='q_all',
                      notification_subscriptions__frequency='i')
-        )
-        subscriber_set.update(global_subscribers)
+        ).select_related('askbot_profile')
+        subscriber_set.update(global_subscribers.iterator(chunk_size=500))
 
         # segment of users who want emails on selected questions only
         if askbot_settings.SUBSCRIBED_TAG_SELECTOR_ENABLED:
@@ -1282,11 +1463,14 @@ class Post(models.Model):
                 tag_mark_reason='bad'
             )
         )
+        log_instant_email(logger, run_id,
+                          '%d global instant notification subscribers for post %d',
+                          len(subscriber_set), self.id)
         return subscriber_set
 
     def _qa__get_instant_notification_subscribers(
             self, potential_subscribers=None, mentioned_users=None,
-            exclude_list=None):
+            exclude_list=None, run_id=None):
         """get list of users who have subscribed to
         receive instant notifications for a given post
 
@@ -1326,6 +1510,9 @@ class Post(models.Model):
                 frequency='i'
             )
             subscriber_set.update(mention_subscribers)
+            log_instant_email(logger, run_id,
+                              '%d mention subscribers for post %d',
+                              len(mention_subscribers), self.id)
 
         origin_post = self.get_origin_post()
 
@@ -1341,10 +1528,17 @@ class Post(models.Model):
                 frequency='i'
             )
             subscriber_set.update(selective_subscribers)
+            log_instant_email(logger, run_id,
+                              '%d selective subscribers for post %d',
+                              len(selective_subscribers), self.id)
 
         # 3) whole forum subscribers
-        global_subscribers = origin_post.get_global_instant_notification_subscribers()
+        global_subscribers = origin_post.get_global_instant_notification_subscribers(
+            run_id=run_id)
         subscriber_set.update(global_subscribers)
+        log_instant_email(logger, run_id,
+                          '%d global subscribers for post %d',
+                          len(global_subscribers), self.id)
 
         # 4) question asked by me (todo: not "edited_by_me" ???)
         question_author = origin_post.author
@@ -1354,28 +1548,38 @@ class Post(models.Model):
             feed_type='q_ask'
         ).exists():
             subscriber_set.add(question_author)
+            log_instant_email(logger, run_id,
+                              'added question author %d as subscriber for post %d',
+                              question_author.id, self.id)
 
         # 4) questions answered by me -make sure is that people
         # are authors of the answers to this question
-        # TODO: replace this with a query set method
-        answer_authors = set()
-        for answer in origin_post.thread.posts.get_answers().all():
-            authors = answer.get_author_list()
-            answer_authors.update(authors)
-
-        if answer_authors:
+        # Note: deleted posts are already excluded by get_answers() (filters deleted=False).
+        # Spam-flagged-but-not-deleted posts are a notification-correctness concern, not a memory issue.
+        answer_author_ids = set(
+            origin_post.thread.posts.get_answers().values_list('author_id', flat=True)
+        )
+        if answer_author_ids:
+            answer_authors = User.objects.filter(id__in=answer_author_ids)
             answer_subscribers = EmailFeedSetting.objects.filter_subscribers(
                 potential_subscribers=answer_authors,
                 frequency='i',
                 feed_type='q_ans',
             )
             subscriber_set.update(answer_subscribers)
+            log_instant_email(logger, run_id,
+                              '%d answer-author subscribers for post %d',
+                              len(answer_subscribers), self.id)
 
-        return subscriber_set - set(exclude_list)
+        result = subscriber_set - set(exclude_list)
+        log_instant_email(logger, run_id,
+                          '%d total qa subscribers for post %d (excluded %d)',
+                          len(result), self.id, len(exclude_list))
+        return result
 
     def _comment__get_instant_notification_subscribers(
             self, potential_subscribers=None, mentioned_users=None,
-            exclude_list=None):
+            exclude_list=None, run_id=None):
         """get list of users who want instant notifications about comments
 
         argument potential_subscribers is required as it saves on db hits
@@ -1408,6 +1612,9 @@ class Post(models.Model):
                                         feed_type='m_and_c',
                                         frequency='i')
             subscriber_set.update(comment_subscribers)
+            log_instant_email(logger, run_id,
+                              '%d comment subscribers for post %d',
+                              len(comment_subscribers), self.id)
 
         origin_post = self.get_origin_post()
         # TODO: The line below works only if origin_post is Question !
@@ -1422,26 +1629,43 @@ class Post(models.Model):
                     subscriber_set.add(subscriber)
 
             subscriber_set.update(selective_subscribers)
+            log_instant_email(logger, run_id,
+                              '%d selective subscribers for comment %d',
+                              len(selective_subscribers), self.id)
 
-        global_subscribers = origin_post.get_global_instant_notification_subscribers()
+        global_subscribers = origin_post.get_global_instant_notification_subscribers(
+            run_id=run_id)
         subscriber_set.update(global_subscribers)
+        log_instant_email(logger, run_id,
+                          '%d global subscribers for comment %d',
+                          len(global_subscribers), self.id)
 
-        return subscriber_set - set(exclude_list)
+        result = subscriber_set - set(exclude_list)
+        log_instant_email(logger, run_id,
+                          '%d total comment subscribers for post %d',
+                          len(result), self.id)
+        return result
 
     def get_instant_notification_subscribers(
             self, potential_subscribers=None, mentioned_users=None,
-            exclude_list=None):
+            exclude_list=None, run_id=None):
+        log_instant_email(logger, run_id,
+                          'collecting subscribers for %s post %d',
+                          self.post_type, self.id)
+
         if self.is_question() or self.is_answer():
             subscribers = self._qa__get_instant_notification_subscribers(
                 potential_subscribers=potential_subscribers,
                 mentioned_users=mentioned_users,
-                exclude_list=exclude_list
+                exclude_list=exclude_list,
+                run_id=run_id
             )
         elif self.is_comment():
             subscribers = self._comment__get_instant_notification_subscribers(
                 potential_subscribers=potential_subscribers,
                 mentioned_users=mentioned_users,
-                exclude_list=exclude_list
+                exclude_list=exclude_list,
+                run_id=run_id
             )
         elif self.is_tag_wiki() or self.is_reject_reason():
             return set()
@@ -1450,7 +1674,12 @@ class Post(models.Model):
 
         # if askbot_settings.GROUPS_ENABLED and self.is_effectively_private():
         # for subscriber in subscribers:
+        pre_filter_count = len(subscribers)
         subscribers = self.filter_authorized_users(subscribers)
+        log_instant_email(logger, run_id,
+                          '%d subscribers after authorization filter '
+                          '(was %d) for post %d',
+                          len(subscribers), pre_filter_count, self.id)
 
         # filter subscribers by language
         if askbot.is_multilingual():
@@ -1460,11 +1689,17 @@ class Post(models.Model):
                 subscriber_languages = subscriber.get_languages()
                 if language in subscriber_languages:
                     filtered_subscribers.append(subscriber)
+            if askbot_settings.DEBUG_EMAIL_ALERTS:
+                removed = len(subscribers) - len(filtered_subscribers)
+                log_instant_email(logger, run_id,
+                                  'filtered %d of %d subscribers by language %r for post %d',
+                                  removed, len(subscribers), language, self.id)
             return filtered_subscribers
         else:
             return subscribers
 
-    def get_notify_sets(self, mentioned_users=None, exclude_list=None):
+    def get_notify_sets(self, mentioned_users=None, exclude_list=None,
+                        run_id=None):
         """returns three lists of users in a dictionary with keys:
         * 'for_inbox' - users for which to add inbox items
         * 'for_mentions' - for whom mentions are added
@@ -1487,29 +1722,45 @@ class Post(models.Model):
             result['for_email'] = self.get_instant_notification_subscribers(
                 potential_subscribers=result['for_inbox'],
                 mentioned_users=result['for_mentions'],
-                exclude_list=exclude_list)
+                exclude_list=exclude_list,
+                run_id=run_id)
+        log_instant_email(logger, run_id,
+                          'notify sets for post %d — inbox: %d, mentions: %d, email: %d',
+                          self.id,
+                          len(result['for_inbox']),
+                          len(result['for_mentions']),
+                          len(result['for_email']))
         return result
 
     def cache_latest_revision(self, rev):
         setattr(self, '_last_rev_cache', rev)
 
-    def get_latest_revision(self):
+    def get_latest_revision(self, visitor=None):
+        """Returns the latest revision the `visitor` is allowed to see."""
         if hasattr(self, '_last_rev_cache'):
             return self._last_rev_cache
-        rev = self.revisions.order_by('-revision')[0]
+
+        rev = self.revisions.order_by('-id')[0]
+        if not rev.can_be_seen_by(visitor):
+            rev = self.revisions.exclude(revision=0).order_by('-id')[0]
+
         self.cache_latest_revision(rev)
         return rev
-#       # TODO: remove this method
-#       return self.current_revision
 
-    def get_earliest_revision(self):
+    def get_earliest_revision(self, visitor=None):
+        """Returns the earliest revision the `visitor` is allowed to see."""
         if hasattr(self, '_first_rev_cache'):
             return self._first_rev_cache
-        rev = self.revisions.order_by('revision')[0]
+
+        rev = self.revisions.order_by('id')[0]
+        if not rev.can_be_seen_by(visitor):
+            rev = self.revisions.exclude(revision=0).order_by('id')[0]
+
         setattr(self, '_first_rev_cache', rev)
         return rev
 
     def get_latest_revision_number(self):
+        """Returns order number of the latest revision"""
         try:
             return self.get_latest_revision().revision
         except IndexError:
@@ -1578,7 +1829,7 @@ class Post(models.Model):
         return when, who
 
     def tagname_meta_generator(self):
-        return u','.join([unicode(tag) for tag in self.get_tag_names()])
+        return ','.join([str(tag) for tag in self.get_tag_names()])
 
     def get_parent_post(self):
         """returns parent post or None
@@ -1674,7 +1925,7 @@ class Post(models.Model):
         if not self.is_answer():
             raise NotImplementedError
 
-        if user.is_anonymous():
+        if user.is_anonymous:
             return None
 
         votes = self.votes.filter(user=user)
@@ -1690,7 +1941,7 @@ class Post(models.Model):
                 raise exceptions.QuestionHidden(_('Sorry, this content is not available'))
         if self.deleted:
             message = _('Sorry, this content is no longer available')
-            if user.is_anonymous():
+            if user.is_anonymous:
                 raise exceptions.QuestionHidden(message)
             try:
                 user.assert_can_see_deleted_post(self)
@@ -1706,7 +1957,7 @@ class Post(models.Model):
             raise exceptions.QuestionHidden(message)
         if self.deleted:
             message = _('Sorry, this content is no longer available')
-            if user.is_anonymous():
+            if user.is_anonymous:
                 raise exceptions.AnswerHidden(message)
             try:
                 user.assert_can_see_deleted_post(self)
@@ -1741,7 +1992,7 @@ class Post(models.Model):
             raise NotImplementedError
 
         message = _('This post is temporarily not available')
-        if user.is_anonymous():
+        if user.is_anonymous:
             raise exception(message)
         else:
             user_groups_ids = user.get_groups().values_list('id', flat=True)
@@ -1784,12 +2035,20 @@ class Post(models.Model):
     def get_tag_names(self):
         return self.thread.get_tag_names()
 
-    def __apply_edit(self, edited_at=None, edited_by=None, text=None,
-                     comment=None, wiki=False, edit_anonymously=False,
-                     is_private=False, by_email=False, suppress_email=False,
-                     ip_addr=None):
-
-        latest_rev = self.get_latest_revision()
+    def apply_edit(
+                    self,
+                    edited_at=None,
+                    edited_by=None,
+                    text=None,
+                    comment=None,
+                    wiki=False,
+                    edit_anonymously=False,
+                    is_private=False,
+                    by_email=False,
+                    suppress_email=False,
+                    ip_addr=None,
+                ):
+        latest_rev = self.get_latest_revision(edited_by)
 
         if text is None:
             text = latest_rev.text
@@ -1830,7 +2089,7 @@ class Post(models.Model):
                 is_anonymous=edit_anonymously
             )
 
-        if latest_rev.revision > 0:
+        if latest_rev.revision > 0 or not self.approved:
             parse_results = self.parse_and_save(author=edited_by,
                                                 is_private=is_private)
 
@@ -1855,71 +2114,17 @@ class Post(models.Model):
 
         return latest_rev
 
-    def _answer__apply_edit(self, edited_at=None, edited_by=None, text=None,
-                            comment=None, wiki=False, is_private=False,
-                            edit_anonymously=False, by_email=False,
-                            suppress_email=False, ip_addr=None):
-
-        # it is important to do this before __apply_edit b/c of signals!!!
-        if self.is_private() != is_private:
-            if is_private:
-                self.make_private(self.author)
-            else:
-                self.make_public()
-
-        if edited_at is None:
-            edited_at = timezone.now()
-
-        revision = self.__apply_edit(
-            edited_at=edited_at,
-            edited_by=edited_by,
-            text=text,
-            comment=comment,
-            wiki=wiki,
-            by_email=by_email,
-            is_private=is_private,
-            suppress_email=suppress_email,
-            ip_addr=ip_addr,
-        )
-        return revision
-
-    def _question__apply_edit(self, edited_at=None, edited_by=None, title=None,
-                              text=None, comment=None, tags=None, wiki=False,
-                              edit_anonymously=False, is_private=False,
-                              by_email=False, suppress_email=False,
-                              ip_addr=None):
-
-        revision = self.__apply_edit(
-            edited_at=edited_at,
-            edited_by=edited_by,
-            text=text,
-            comment=comment,
-            wiki=wiki,
-            edit_anonymously=edit_anonymously,
-            is_private=is_private,
-            by_email=by_email,
-            suppress_email=suppress_email,
-            ip_addr=ip_addr
-        )
-        return revision
-
-    def apply_edit(self, *args, **kwargs):
-        # TODO: unify this, here we have unnecessary indirection
-        # the question__apply_edit function is backwards:
-        # the title edit and tag edit should apply to thread
-        # not the question post
-        if self.is_answer():
-            return self._answer__apply_edit(*args, **kwargs)
-        elif self.is_question():
-            return self._question__apply_edit(*args, **kwargs)
-        elif self.is_tag_wiki() or self.is_comment() or self.is_reject_reason():
-            return self.__apply_edit(*args, **kwargs)
-        raise NotImplementedError
-
-    def __add_revision(self, author=None, revised_at=None, text=None,
-                       comment=None, by_email=False, ip_addr=None,
-                       is_anonymous=False):
-        # TODO: this may be identical to Question.add_revision
+    def __add_revision(
+                    self,
+                    author=None,
+                    revised_at=None,
+                    text=None,
+                    comment=None,
+                    by_email=False,
+                    ip_addr=None,
+                    is_anonymous=False
+                ):
+        #todo: this may be identical to Question.add_revision
         if None in (author, revised_at, text):
             raise Exception('arguments author, revised_at and text are required')
         return PostRevision.objects.create(
@@ -1947,7 +2152,7 @@ class Post(models.Model):
             is_anonymous=is_anonymous,
             revised_at=revised_at,
             tagnames=self.thread.tagnames,
-            summary=unicode(comment),
+            summary=str(comment),
             text=text,
             by_email=by_email,
             email_address=email_address,
@@ -2034,7 +2239,7 @@ class Post(models.Model):
             else:
                 attr = None
             if attr is not None:
-                return u'%s %s' % (self.thread.title, unicode(attr))
+                return '%s %s' % (self.thread.title, str(attr))
             else:
                 return self.thread.title
         raise NotImplementedError
@@ -2132,7 +2337,7 @@ class PostRevisionManager(models.Manager):
             # set default summary
             if revision.summary == '':
                 if revision.revision == 1:
-                    revision.summary = unicode(const.POST_STATUS['default_version'])
+                    revision.summary = str(const.POST_STATUS['default_version'])
                 else:
                     revision.summary = 'No.%s Revision' % revision.revision
             revision.save()
@@ -2176,15 +2381,15 @@ class PostRevision(models.Model):
     )
 
     post = models.ForeignKey('askbot.Post', related_name='revisions',
-                             null=True, blank=True)
+                             null=True, blank=True, on_delete=models.CASCADE)
     revision = models.PositiveIntegerField()
-    author = models.ForeignKey('auth.User', related_name='%(class)ss')
+    author = models.ForeignKey('auth.User', related_name='%(class)ss', on_delete=models.CASCADE)
     revised_at = models.DateTimeField()
     summary = models.CharField(max_length=300, blank=True)
     text = models.TextField(blank=True)
 
     approved = models.BooleanField(default=False, db_index=True)
-    approved_by = models.ForeignKey(User, null=True, blank=True)
+    approved_by = models.ForeignKey(User, null=True, blank=True, on_delete=models.CASCADE)
     approved_at = models.DateTimeField(null=True, blank=True)
 
     by_email = models.BooleanField(default=False)  # true, if edited by email
@@ -2210,14 +2415,34 @@ class PostRevision(models.Model):
         verbose_name = _("post revision")
         verbose_name_plural = _("post revisions")
 
+    def can_be_seen_by(self, user):
+        """Returns `True` if user can see revision.
+
+        Group membership checks are not done here,
+        because we want this method to not incur additional DB queries.
+
+        Therefore, this method  should not be used directly,
+        but only after the parent posts are filtered by groups.
+        """
+        is_published = self.revision != 0
+
+        if is_published:
+            return True
+
+        if not user or user.is_anonymous:
+            return False
+
+        # revision is moderated, can be seen by mods or revision authors
+        return user.is_admin_or_mod() or self.author_id == user.pk
+
+
     def place_on_moderation_queue(self):
         """Creates moderation queue
         Activity items with recipients
         """
         if self.post.revisions.count() == 1:
             if self.revision == 0:
-                # call below hides post from the display to the
-                # general public
+                # call below hides post from the display to the general public
                 self.post.set_is_approved(False)
             activity_type = const.TYPE_ACTIVITY_MODERATED_NEW_POST
         else:
@@ -2277,15 +2502,14 @@ class PostRevision(models.Model):
         schedule = askbot_settings.SELF_NOTIFY_EMAILED_POST_AUTHOR_WHEN
         if schedule == const.NEVER:
             return False
-        elif schedule == const.FOR_FIRST_REVISION:
+        if schedule == const.FOR_FIRST_REVISION:
             return self.revision == 1
-        elif schedule == const.FOR_ANY_REVISION:
+        if schedule == const.FOR_ANY_REVISION:
             return True
-        else:
-            raise ValueError()
+        raise ValueError()
 
-    def __unicode__(self):
-        return u'%s - revision %s of %s' % (self.post.post_type, self.revision,
+    def __str__(self):
+        return '%s - revision %s of %s' % (self.post.post_type, self.revision,
                                             self.title)
 
     def parent(self):
@@ -2320,27 +2544,41 @@ class PostRevision(models.Model):
 
         return url
 
+    def get_action_label(self):
+        if self.revision == 0:
+            return _('proposed an edit')
+        if self.revision == 1:
+            if self.post.post_type == 'question':
+                return html_utils.escape(askbot_settings.WORDS_ASKED)
+            if self.post.post_type == 'answer':
+                return html_utils.escape(askbot_settings.WORDS_ANSWERED)
+            return _('posted')
+        return _('updated')
+
     def get_question_title(self):
         # INFO: ack-grepping shows that it's only used for Questions,
         #       so there's no code for Answers
         return self.question.thread.title
 
     def get_origin_post(self):
-        """same as Post.get_origin_post()"""
+        """Same as Post.get_origin_post()"""
         return self.post.get_origin_post()
+
+    def get_original_post_author(self):
+        """Returns original author of the post"""
+        if self.post.post_type in ('question', 'answer'):
+            return self.post.author
+        return None
 
     @property
     def html(self, **kwargs):
-        markdowner = markup.get_parser()
-        sanitized_html = sanitize_html(markdowner.convert(self.text))
-
+        sanitized_html = markup.markdown_input_converter(self.text)
         if self.post.is_question():
             return sanitize_html(self.QUESTION_REVISION_TEMPLATE_NO_TAGS % {
                 'title': self.title,
                 'html': sanitized_html
             })
-        else:
-            return sanitized_html
+        return sanitized_html
 
     def get_snippet(self, max_length=120):
         """a little simpler than as Post.get_snippet"""
@@ -2349,9 +2587,9 @@ class PostRevision(models.Model):
 
 class PostFlagReason(models.Model):
     added_at = models.DateTimeField()
-    author = models.ForeignKey('auth.User')
+    author = models.ForeignKey('auth.User', on_delete=models.CASCADE)
     title = models.CharField(max_length=128)
-    details = models.ForeignKey(Post, related_name='post_reject_reasons')
+    details = models.ForeignKey(Post, related_name='post_reject_reasons', on_delete=models.CASCADE)
 
     class Meta:
         app_label = 'askbot'
@@ -2364,8 +2602,8 @@ class DraftAnswer(DraftContent):
     note that unlike ``AnonymousAnswer`` the foreign key
     is going to ``Thread`` as it should.
     """
-    thread = models.ForeignKey('Thread', related_name='draft_answers')
-    author = models.ForeignKey(User, related_name='draft_answers')
+    thread = models.ForeignKey('Thread', related_name='draft_answers', on_delete=models.CASCADE)
+    author = models.ForeignKey(User, related_name='draft_answers', on_delete=models.CASCADE)
 
     class Meta:
         app_label = 'askbot'
@@ -2373,7 +2611,7 @@ class DraftAnswer(DraftContent):
 
 class AnonymousAnswer(AnonymousContent):
     """Todo: re-route the foreign key to ``Thread``"""
-    question = models.ForeignKey(Post, related_name='anonymous_answers')
+    question = models.ForeignKey(Post, related_name='anonymous_answers', on_delete=models.CASCADE)
 
     def publish(self, user):
         added_at = timezone.now()

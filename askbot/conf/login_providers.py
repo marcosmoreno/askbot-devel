@@ -1,12 +1,12 @@
 """
 External service key settings
 """
-from django.utils.translation import string_concat
-from django.utils.translation import ugettext_lazy as _
+from django.utils.text import format_lazy
+from django.utils.translation import gettext_lazy as _
 
 from askbot.conf.settings_wrapper import settings
 from askbot.conf.super_groups import LOGIN_USERS_COMMUNICATION
-from askbot.deps import livesettings
+from livesettings import values as livesettings
 from askbot.skins import utils as skin_utils
 from askbot.utils.loading import module_exists
 
@@ -123,23 +123,50 @@ if module_exists('cas'):
         )
     )
 
-# settings.register(
-#     livesettings.BooleanValue(
-#         LOGIN_PROVIDERS,
-#         'CAS_ONE_CLICK_REGISTRATION_ENABLED',
-#         default=False,
-#         description=_('CAS - enable one click registration'),
-#         help_text=string_concat(
-#             _('Allows skipping the registration page after the CAS '
-#               'authentication.'),
-#             ' ',
-#             settings.get_related_settings_info(
-#                 ('EMAIL', 'BLANK_EMAIL_ALLOWED', True, _('Must be enabled')),
-#                 ('ACCESS_CONTROL', 'REQUIRE_VALID_EMAIL_FOR', True, _('Must be not be required')),
-#             )
-#         ),
-#     )
-# )
+"""
+    settings.register(
+        livesettings.BooleanValue(
+            LOGIN_PROVIDERS,
+            'CAS_ONE_CLICK_REGISTRATION_ENABLED',
+            default=False,
+            description=_('CAS - enable one click registration'),
+            help_text=string_concat(
+                _('Allows skipping the registration page after the CAS authentication.'),
+                ' ',
+                settings.get_related_settings_info(
+                    ('EMAIL', 'BLANK_EMAIL_ALLOWED', True, _('Must be enabled')),
+                    ('ACCESS_CONTROL', 'EMAIL_VALIDATION_REQUIRED', True, _('Must be disabled')),
+                )
+            ),
+        )
+    )
+"""
+
+settings.register(
+    livesettings.BooleanValue(
+        LOGIN_PROVIDERS,
+        'SIGNIN_DISCOURSE_ENABLED',
+        default=False,
+        description=_('Enable Discourse login')
+    )
+)
+
+settings.register(
+    livesettings.StringValue(
+        LOGIN_PROVIDERS,
+        'DISCOURSE_SITE_URL',
+        description=_('Base url of your Discourse site')
+    )
+)
+
+settings.register(
+    livesettings.StringValue(
+        LOGIN_PROVIDERS,
+        'DISCOURSE_SSO_SECRET',
+        description=_('Secret key of the Discourse site')
+    )
+)
+
 
 settings.register(
     livesettings.StringValue(
@@ -204,6 +231,7 @@ providers = (
     'Facebook',
     'Fedora',
     'Flickr',
+    'GitHub',
     'Google Plus',
     'Mozilla Persona',
     'Twitter',
@@ -220,16 +248,19 @@ providers = (
     'identi.ca',
     'LaunchPad',
     'OpenStackID',
+    'Yammer',
+    'Windows Live',
+    'Microsoft Azure',
 )
 
 DISABLED_BY_DEFAULT = ('LaunchPad', 'Mozilla Persona', 'OpenStackID')
 
 NEED_EXTRA_SETUP = ('Google Plus', 'Twitter', 'MediaWiki', 'Facebook',
-                    'LinkedIn', 'identi.ca')
+                    'LinkedIn', 'identi.ca', 'Yammer', 'Windows Live', 'Microsoft Azure', 'GitHub',)
 
 for provider in providers:
     if provider == 'local':
-        provider_string = unicode(_('local password'))
+        provider_string = str(_('local password'))
     else:
         provider_string = provider
 
@@ -270,13 +301,12 @@ for provider in providers:
                 'MEDIAWIKI_ONE_CLICK_REGISTRATION_ENABLED',
                 default=False,
                 description=_('MediaWiki - enable one click registration'),
-                help_text=string_concat(
+                help_text=format_lazy('{} {}',
                     _('Allows skipping the registration page after the wiki '
                       'authentication.'),
-                    ' ',
                     settings.get_related_settings_info(
                         ('EMAIL', 'BLANK_EMAIL_ALLOWED', True, _('Must be enabled')),
-                        ('ACCESS_CONTROL', 'REQUIRE_VALID_EMAIL_FOR', True, _('Must be not be required')),
+                        ('ACCESS_CONTROL', 'EMAIL_VALIDATION_REQUIRED', True, _('Must be disabled')),
                     )
                 ),
             )

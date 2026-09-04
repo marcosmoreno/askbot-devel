@@ -7,11 +7,12 @@ the lookup resolution process for templates and media works as follows:
 """
 import os
 import logging
-import urllib
+import urllib.request, urllib.parse, urllib.error
 import askbot
+from collections import OrderedDict
 from askbot.utils import hasher
 from django.conf import settings as django_settings
-from django.utils.datastructures import SortedDict
+
 
 class MediaNotFound(Exception):
     """raised when media file is not found"""
@@ -21,7 +22,7 @@ def get_skins_from_dir(directory):
     """returns sorted dict with skin data, like get_available_skins
     but from a specific directory
     """
-    skins = SortedDict()
+    skins = OrderedDict()
     for item in sorted(os.listdir(directory)):
         item_dir = os.path.join(directory, item)
         if os.path.isdir(item_dir):
@@ -39,7 +40,7 @@ def get_available_skins(selected=None):
 
     selected skin is guaranteed to be the first item in the dictionary
     """
-    skins = SortedDict()
+    skins = OrderedDict()
     extra_skins_dir = getattr(django_settings, 'ASKBOT_EXTRA_SKINS_DIR', None)
     if extra_skins_dir:
         skins.update(get_skins_from_dir(extra_skins_dir))
@@ -52,7 +53,7 @@ def get_available_skins(selected=None):
         skins.clear()
         skins[selected] = selected_dir
     elif selected == 'default':
-        skins = SortedDict()
+        skins = OrderedDict()
     elif selected:
         raise ValueError(
             'skin ' + str(selected) + \
@@ -78,13 +79,13 @@ def get_path_to_skin(skin):
 def get_skin_choices():
     """returns a tuple for use as a set of
     choices in the form"""
-    available_skins = get_available_skins().keys()
+    available_skins = list(get_available_skins().keys())
     skin_names = list(reversed(available_skins))
-    return zip(skin_names, skin_names)
+    return list(zip(skin_names, skin_names))
 
 def resolve_skin_for_media(media=None, preferred_skin = None):
     #see if file exists, if not, try skin 'default'
-    available_skins = get_available_skins(selected=preferred_skin).items()
+    available_skins = list(get_available_skins(selected=preferred_skin).items())
     for skin_name, skin_dir in available_skins:
         if os.path.isfile(os.path.join(skin_dir, 'media', media)):
             return skin_name
@@ -102,7 +103,7 @@ def get_media_url(url, ignore_missing = False):
     """
     #from django.utils import timezone
     #before = timezone.now()
-    url = urllib.unquote(unicode(url))
+    url = urllib.parse.unquote(str(url))
     while url[0] == '/': url = url[1:]
 
     #a hack allowing urls media stored on external locations to
@@ -178,7 +179,7 @@ def update_media_revision(skin=None):
 
     skin = skin or askbot_settings.ASKBOT_DEFAULT_SKIN
 
-    if skin in get_available_skins().keys():
+    if skin in list(get_available_skins().keys()):
         skin_path = get_path_to_skin(skin)
     else:
         assert(skin != 'default')

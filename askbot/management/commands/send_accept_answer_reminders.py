@@ -1,12 +1,14 @@
+
 import datetime
-from django.core.management.base import NoArgsCommand
+from django.core.management import BaseCommand
 from django.conf import settings as django_settings
 from django.template.loader import get_template
 from askbot import models
 from askbot import const
 from askbot.conf import settings as askbot_settings
-from django.utils.translation import ugettext as _
-from django.utils.translation import ungettext
+from django.utils.translation import gettext as _
+from django.utils.translation import ngettext
+from django.utils import translation
 from askbot.mail.messages import AcceptAnswersReminder
 from askbot.utils.classes import ReminderSchedule
 from askbot.utils.html import site_url
@@ -14,8 +16,9 @@ from django.template import Context
 
 DEBUG_THIS_COMMAND = False
 
-class Command(NoArgsCommand):
-    def handle_noargs(self, **options):
+class Command(BaseCommand):
+    def handle(self, **options):
+        translation.activate(django_settings.LANGUAGE_CODE)
         if askbot_settings.ENABLE_EMAIL_ALERTS == False:
             return
         if askbot_settings.ENABLE_ACCEPT_ANSWER_REMINDERS == False:
@@ -42,7 +45,7 @@ class Command(NoArgsCommand):
         #for all users, excluding blocked
         #for each user, select a tag filtered subset
         #format the email reminder and send it
-        for user in models.User.objects.exclude(askbot_profile__status = 'b'):
+        for user in models.User.objects.exclude(askbot_profile__status__in = ('t', 'c')):
             user_questions = questions.filter(author=user)
 
             final_question_list = user_questions.get_questions_needing_reminder(
@@ -63,7 +66,7 @@ class Command(NoArgsCommand):
                     })
 
             if DEBUG_THIS_COMMAND:
-                print "User: %s<br>\nSubject:%s<br>\nText: %s<br>\n" % \
-                    (user.email, email.render_subject(), email.render_body())
+                print("User: %s<br>\nSubject:%s<br>\nText: %s<br>\n" % \
+                    (user.email, email.render_subject(), email.render_body()))
             else:
                 email.send([user.email],)

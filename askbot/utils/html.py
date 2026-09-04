@@ -1,84 +1,62 @@
 """Utilities for working with HTML."""
 import functools
 import re
-from urlparse import urlparse
+from urllib.parse import urlparse
+import html.entities
 
+import bleach
 from bs4 import BeautifulSoup
-import html5lib
-from html5lib import sanitizer, serializer, tokenizer, treebuilders,\
-    treewalkers
-import htmlentitydefs
 
 from django.conf import settings as django_settings
-from django.core.urlresolvers import reverse
 from django.template.loader import get_template
+from django.urls import reverse
 from django.utils.html import strip_tags as strip_all_tags
 from django.utils.html import urlize
-from django.utils.translation import ugettext as _
+from django.utils.translation import gettext as _
+
+from askbot.conf import settings as askbot_settings
+from askbot.utils.url_utils import get_login_url
+
+from askbot.const.sanitizer_config import (
+    ALLOWED_HTML_ELEMENTS,
+    ALLOWED_HTML_ATTRIBUTES,
+    MARKDOWN_EXTRA_TAGS,
+    MARKDOWN_EXTRA_ATTRIBUTES,
+    HIDDEN_HELP_HTML_ELEMENTS,
+)
 
 
-ALLOWED_HTML_ELEMENTS = ('a', 'abbr', 'acronym', 'address', 'b', 'big',
-        'blockquote', 'br', 'caption', 'center', 'cite', 'code', 'col',
-        'colgroup', 'dd', 'del', 'dfn', 'dir', 'div', 'dl', 'dt', 'em', 'font',
-        'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'hr', 'i', 'img', 'ins', 'kbd',
-        'li', 'ol', 'p', 'pre', 'q', 's', 'samp', 'small', 'span', 'strike',
-        'strong', 'sub', 'sup', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead',
-        'tr', 'tt', 'u', 'ul', 'var', 'param')
+def sanitize_html(html_string):
+    """Sanitizes an HTML fragment from forbidden markup.
 
+    Extends the base allowed tags/attributes from settings with
+    markdown-specific needs:
+    - span.class for Pygments syntax highlighting
+    - code.class for markdown-it language classes
+    - input[type,checked,disabled] for task list checkboxes
 
-ALLOWED_HTML_ATTRIBUTES = ('abbr', 'align', 'alt', 'axis', 'border', 'class',
-        'cellpadding', 'cellspacing', 'char', 'charoff', 'charset', 'cite',
-        'cols', 'colspan', 'datetime', 'dir', 'frame', 'headers', 'height',
-        'href', 'hreflang', 'hspace', 'lang', 'longdesc', 'name', 'nohref',
-        'noshade', 'nowrap', 'rel', 'rev', 'rows', 'rowspan', 'rules', 'scope',
-        'span', 'src', 'start', 'summary', 'title', 'type', 'valign', 'vspace',
-        'width')
-
-
-class HTMLSanitizerMixin(sanitizer.HTMLSanitizerMixin):
-    allowed_css_properties = ()
-    allowed_css_keywords = ()
-    allowed_svg_properties = ()
-
-    def __init__(self, *args, **kwargs):
-        self.allowed_elements = tuple(getattr(django_settings,
-                                           'ASKBOT_ALLOWED_HTML_ELEMENTS',
-                                           ALLOWED_HTML_ELEMENTS
-                                           ))
-
-        self.allowed_attributes = tuple(getattr(django_settings,
-                                           'ASKBOT_ALLOWED_HTML_ATTRIBUTES',
-                                           ALLOWED_HTML_ATTRIBUTES
-                                           ))
-
-
-class HTMLSanitizer(tokenizer.HTMLTokenizer, HTMLSanitizerMixin):
-    def __init__(self, stream, encoding=None, parseMeta=True, useChardet=True,
-                 lowercaseElementName=True, lowercaseAttrName=True, **kwargs):
-        tokenizer.HTMLTokenizer.__init__(self, stream, encoding, parseMeta,
-                                         useChardet, lowercaseElementName,
-                                         lowercaseAttrName, **kwargs)
-
-    def __iter__(self):
-        for token in tokenizer.HTMLTokenizer.__iter__(self):
-            token = self.sanitize_token(token)
-            if token:
-                yield token
-
-
-def sanitize_html(html):
-    """Sanitizes an HTML fragment.
-    from forbidden markup
+    Note: Video embeds (iframes) are NOT whitelisted here. They are
+    handled via token-based extraction - iframes are inserted AFTER
+    sanitization in markup.py/markdown_input_converter(). This is
+    more secure than allowing arbitrary iframes through sanitization.
     """
-    p = html5lib.HTMLParser(tokenizer=HTMLSanitizer,
-                            tree=treebuilders.getTreeBuilder("dom"))
-    dom_tree = p.parseFragment(html)
-    walker = treewalkers.getTreeWalker("dom")
-    stream = walker(dom_tree)
-    s = serializer.HTMLSerializer(omit_optional_tags=False,
-                                  quote_attr_values=True)
-    output_generator = s.serialize(stream)
-    return u''.join(output_generator)
+    # Extend base allowed tags with markdown-specific ones
+    tags = ALLOWED_HTML_ELEMENTS + MARKDOWN_EXTRA_TAGS
+
+    # Merge base attributes with markdown-specific ones
+    attributes = ALLOWED_HTML_ATTRIBUTES
+    for tag, attrs in MARKDOWN_EXTRA_ATTRIBUTES.items():
+        if tag in attributes:
+            existing = set(attributes[tag])
+            existing.update(attrs)
+            attributes[tag] = list(existing)
+        else:
+            attributes[tag] = attrs
+
+    return bleach.clean(html_string,
+                        tags=tags,
+                        attributes=attributes,
+                        strip=True)
 
 
 def sanitized(func):
@@ -88,7 +66,7 @@ def sanitized(func):
     return wrapped
 
 
-def absolutize_urls(html):
+def absolutize_urls(html_string):
     """turns relative urls in <img> and <a> tags to absolute,
     starting with the ``askbot_settings.APP_URL``"""
     # temporal fix for bad regex with wysiwyg editor
@@ -97,18 +75,18 @@ def absolutize_urls(html):
     url_re3 = re.compile(r'(?P<prefix><a[^<]+href=)"(?P<url>/[^"]+)"', re.I)
     url_re4 = re.compile(r"(?P<prefix><a[^<]+href=)'(?P<url>/[^']+)'", re.I)
     base_url = site_url('')  # important to have this without the slash
-    img_replacement = '\g<prefix>"%s/\g<url>"' % base_url
-    replacement = '\g<prefix>"%s\g<url>"' % base_url
-    html = url_re1.sub(img_replacement, html)
-    html = url_re2.sub(img_replacement, html)
-    html = url_re3.sub(replacement, html)
+    img_replacement = rf'\g<prefix>"{base_url}/\g<url>"'
+    replacement = rf'\g<prefix>"{base_url}\g<url>"'
+    html_string = url_re1.sub(img_replacement, html_string)
+    html_string = url_re2.sub(img_replacement, html_string)
+    html_string = url_re3.sub(replacement, html_string)
     # temporal fix for bad regex with wysiwyg editor
-    return url_re4.sub(replacement, html)\
-        .replace('%s//' % base_url, '%s/' % base_url)
+    return url_re4.sub(replacement, html_string)\
+        .replace(f'{base_url}//', f'{base_url}/')
 
 
-def get_word_count(html):
-    return len(strip_all_tags(html).split())
+def get_word_count(html_string):
+    return len(strip_all_tags(html_string).split())
 
 
 def format_url_replacement(url, text):
@@ -116,17 +94,17 @@ def format_url_replacement(url, text):
     text = text.strip()
     url_domain = urlparse(url).netloc
     if url and text and url_domain != text and url != text:
-        return '%s (%s)' % (url, text)
+        return f'{url} ({text})'
     return url or text or ''
 
 
 @sanitized
-def urlize_html(html, trim_url_limit=40):
+def urlize_html(html_string, trim_url_limit=40):
     """will urlize html, while ignoring link
     patterns inside anchors, <pre> and <code> tags
     """
-    soup = BeautifulSoup(html, 'html5lib')
-    extract_nodes = list()
+    soup = BeautifulSoup(html_string, 'html5lib')
+    extract_nodes = []
     for node in soup.findAll(text=True):
         parent_tags = [p.name for p in node.parents]
         skip_tags = ['a', 'img', 'pre', 'code']
@@ -136,13 +114,13 @@ def urlize_html(html, trim_url_limit=40):
         # bs4 is weird, so we work around to replace nodes
         # maybe there is a better way though
         urlized_text = urlize(node, trim_url_limit=trim_url_limit)
-        if unicode(node) == urlized_text:
+        if str(node) == urlized_text:
             continue
 
         sub_soup = BeautifulSoup(urlized_text, 'html5lib')
         contents = sub_soup.find('body').contents
         num_items = len(contents)
-        for i in range(num_items):
+        for _idx in range(num_items):
             # there is strange thing in bs4, can't iterate
             # as the tag seemingly can't belong to >1 soup object
             child = contents[0]  # always take first element
@@ -160,19 +138,19 @@ def urlize_html(html, trim_url_limit=40):
     for node in extract_nodes:
         node.extract()
 
-    result = unicode(soup.find('body').renderContents(), 'utf8')
-    if html.endswith('\n') and not result.endswith('\n'):
+    result = str(soup.find('body').renderContents(), 'utf8')
+    if html_string.endswith('\n') and not result.endswith('\n'):
         result += '\n'
 
     return result
 
 
 @sanitized
-def replace_links_with_text(html):
+def replace_links_with_text(html_string):
     """any absolute links will be replaced with the
     url in plain text, same with any img tags
     """
-    soup = BeautifulSoup(html, 'html5lib')
+    soup = BeautifulSoup(html_string, 'html5lib')
     abs_url_re = r'^http(s)?://'
 
     images = soup.find_all('img')
@@ -192,7 +170,7 @@ def replace_links_with_text(html):
         elif url == '' or re.match(abs_url_re, url):
             link.replaceWith(format_url_replacement(url, text))
 
-    return unicode(soup.find('body').renderContents(), 'utf-8')
+    return str(soup.find('body').renderContents(), 'utf-8')
 
 
 def get_text_from_html(html_text):
@@ -217,41 +195,40 @@ def get_text_from_html(html_text):
 
     #extract and join phrases
     body_element = soup.find('body')
-    filter_func = lambda s: bool(s.strip())
-    phrases = map(
-        lambda s: s.strip(),
-        filter(filter_func, body_element.get_text().split('\n'))
-    )
+
+    def filter_func(string):
+        return bool(string.strip())
+
+    phrases = [s.strip() for s in list(filter(filter_func, body_element.get_text().split('\n')))]
     return '\n\n'.join(phrases)
 
 
 @sanitized
-def strip_tags(html, tags=None):
+def strip_tags(html_string, tags=None):
     """strips tags from given html output"""
     #a corner case
-    if html.strip() == '':
-        return html
+    if html_string.strip() == '':
+        return html_string
 
-    assert(tags != None)
+    assert tags is not None
 
-    soup = BeautifulSoup(html, 'html5lib')
+    soup = BeautifulSoup(html_string, 'html5lib')
     for tag in tags:
         tag_matches = soup.find_all(tag)
-        map(lambda v: v.replaceWith(''), tag_matches)
-    return unicode(soup.find('body').renderContents(), 'utf-8')
+        list(map(lambda v: v.replaceWith(''), tag_matches))
+    return str(soup.find('body').renderContents(), 'utf-8')
 
 
-def has_moderated_tags(html):
+def has_moderated_tags(html_string):
     """True, if html contains tags subject to moderation
     (images and/or links)"""
-    from askbot.conf import settings
-    soup = BeautifulSoup(html, 'html5lib')
-    if settings.MODERATE_LINKS:
+    soup = BeautifulSoup(html_string, 'html5lib')
+    if askbot_settings.MODERATE_LINKS:
         links = soup.find_all('a')
         if links:
             return True
 
-    if settings.MODERATE_IMAGES:
+    if askbot_settings.MODERATE_IMAGES:
         images = soup.find_all('img')
         if images:
             return True
@@ -260,38 +237,36 @@ def has_moderated_tags(html):
 
 
 @sanitized
-def moderate_tags(html):
+def moderate_tags(html_string):
     """replaces instances of <a> and <img>
     with "item in moderation" alerts
     """
-    from askbot.conf import settings
-    soup = BeautifulSoup(html, 'html5lib')
+    soup = BeautifulSoup(html_string, 'html5lib')
     replaced = False
-    if settings.MODERATE_LINKS:
+    if askbot_settings.MODERATE_LINKS:
         links = soup.find_all('a')
         if links:
             template = get_template('widgets/moderated_link.html')
             aviso = BeautifulSoup(template.render(), 'html5lib').find('body')
-            map(lambda v: v.replaceWith(aviso), links)
+            list(map(lambda v: v.replaceWith(aviso), links))
             replaced = True
 
-    if settings.MODERATE_IMAGES:
+    if askbot_settings.MODERATE_IMAGES:
         images = soup.find_all('img')
         if images:
             template = get_template('widgets/moderated_link.html')
             aviso = BeautifulSoup(template.render(), 'html5lib').find('body')
-            map(lambda v: v.replaceWith(aviso), images)
+            list(map(lambda v: v.replaceWith(aviso), images))
             replaced = True
 
     if replaced:
-        return unicode(soup.find('body').renderContents(), 'utf-8')
+        return str(soup.find('body').renderContents(), 'utf-8')
 
-    return html
+    return html_string
 
 
 def site_url(url):
-    from askbot.conf import settings
-    base_url = urlparse(settings.APP_URL or 'http://localhost/')
+    base_url = urlparse(askbot_settings.APP_URL or 'http://localhost/')
     return base_url.scheme + '://' + base_url.netloc + url
 
 
@@ -307,7 +282,7 @@ def internal_link(url_name, title, kwargs=None, anchor=None, absolute=False):
         url += '#' + anchor
     if absolute:
         url = site_url(url)
-    return '<a href="%s">%s</a>' % (url, title)
+    return f'<a href="{url}">{title}</a>'
 
 
 def site_link(url_name, title, kwargs=None, anchor=None):
@@ -318,18 +293,18 @@ def site_link(url_name, title, kwargs=None, anchor=None):
 
 
 def get_login_link(text=None):
-    from askbot.utils.url_utils import get_login_url
     text = text or _('please login')
-    return '<a href="%s">%s</a>' % (get_login_url(), text)
+    url = get_login_url()
+    return f'<a href="{url}">{text}</a>'
 
 
-def get_visible_text(html):
+def get_visible_text(html_string):
     """returns visible text from html
     http://stackoverflow.com/a/19760007/110274
     """
-    soup = BeautifulSoup(html, 'html5lib')
-    [s.extract()
-     for s in soup(['style', 'script', '[document]', 'head', 'title'])]
+    soup = BeautifulSoup(html_string, 'html5lib')
+    for item in soup(['style', 'script', '[document]', 'head', 'title']):
+        item.extract()
     return soup.get_text()
 
 
@@ -339,22 +314,21 @@ def unescape(text):
     @param text The HTML (or XML) source text.
     @return The plain text, as a Unicode string, if necessary.
     """
-    def fixup(m):
-        text = m.group(0)
+    def fixup(match):
+        text = match.group(0)
         if text[:2] == "&#":
             # character reference
             try:
                 if text[:3] == "&#x":
-                    return unichr(int(text[3:-1], 16))
-                else:
-                    return unichr(int(text[2:-1]))
+                    return chr(int(text[3:-1], 16))
+                return chr(int(text[2:-1]))
             except ValueError:
                 pass
         else:
             # named entity
             try:
-                text = unichr(htmlentitydefs.name2codepoint[text[1:-1]])
+                text = chr(html.entities.name2codepoint[text[1:-1]])
             except KeyError:
                 pass
         return text  # leave as is
-    return re.sub("&#?\w+;", fixup, text)
+    return re.sub(r'&#?\w+;', fixup, text)

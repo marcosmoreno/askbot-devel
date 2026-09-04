@@ -1,25 +1,114 @@
 import datetime
 import logging
-import re
+from collections import defaultdict
 from django.db import models
-from django.db.backends.dummy.base import IntegrityError
+from django.db.utils import IntegrityError
 from django.contrib.contenttypes.models import ContentType
-from django.contrib.contenttypes import generic
+from django.contrib.contenttypes import fields
 from django.contrib.auth.models import User
 from django.contrib.auth.models import Group as AuthGroup
 from django.core import exceptions
-from django.forms import EmailField, URLField
+from django.forms import EmailField
 from django.utils import translation, timezone
-from django.utils.translation import ugettext as _
-from django.utils.translation import ugettext_lazy
-from django.utils.html import strip_tags
+from django.utils.translation import gettext as _
+from django.utils.translation import gettext_lazy
+import tldextract
 from askbot import const
 from askbot.conf import settings as askbot_settings
 from askbot.utils import functions
 from askbot.models.base import BaseQuerySetManager
-from collections import defaultdict
+from askbot.models.tag import get_tags_by_names, Tag
 
 PERSONAL_GROUP_NAME_PREFIX = '_personal_'
+
+def get_organization_name_from_domain(domain):
+    """Returns organization name from domain.
+    The organization name is the second level domain name,
+    sentence-cased.
+    """
+    result = tldextract.extract(domain)
+    raw_name = result.domain
+    return '-'.join(part.capitalize() for part in raw_name.split('-'))
+
+class InvitedModerator(object):
+    """Mock user class to represent invited moderators.
+    Must implement enough of the User interface to pass
+    through the email template rendering pipeline."""
+    is_anonymous = False
+    is_authenticated = True
+    is_staff = False
+
+    def __init__(self, username, email):
+        self.username = username
+        self.email = email
+        self.reputation = 1
+        self.invited_outside_moderator = True
+
+    def is_blocked(self):
+        return False
+
+    def can_post_by_email(self):
+        return False
+
+    def is_administrator_or_moderator(self):
+        return False
+
+    @classmethod
+    def make_from_setting(cls, setting_line):
+        """Takes one line formatted as <email> <name>
+        and if first value is a valid email,
+        returns an instance of InvitedModerator,
+        otherwise returns `None`"""
+        bits = setting_line.strip().split()
+        if len(bits) < 2:
+            return None
+
+        email = bits[0]
+        if not functions.is_email_valid(email):
+            return None
+        name = ' '.join(bits[1:])
+
+        return cls(name, email)
+
+def get_invited_moderators(include_registered=False):
+    """Returns list of InvitedModerator instances
+    corresponding to values of askbot_settings.INVITED_MODERATORS"""
+    values = askbot_settings.INVITED_MODERATORS.strip()
+    moderators = set()
+    for user_line in values.split('\n'):
+        mod = InvitedModerator.make_from_setting(user_line)
+        if mod:
+            moderators.add(mod)
+
+    # exclude existing users
+    clean_emails = set([mod.email for mod in moderators])
+
+    if include_registered == True:
+        return set(moderators)
+
+    existing_users = User.objects.filter(email__in=clean_emails)
+    existing_emails = set(existing_users.values_list('email', flat=True))
+    outside_emails = clean_emails - existing_emails
+
+    def is_outside_mod(mod):
+        return mod.email in outside_emails
+
+    return set(filter(is_outside_mod, moderators))
+
+
+def remove_email_from_invited_moderators(email):
+    """Update the `INVITED_MODERATORS` setting by removing
+    the matching email entry"""
+    lines = askbot_settings.INVITED_MODERATORS.strip().split('\n')
+    clean_lines = []
+    prefix = email + ' '
+    for line in lines:
+        if not line.startswith(prefix):
+            clean_lines.append(line)
+    if len(clean_lines) != len(lines):
+        value = '\n'.join(clean_lines)
+        askbot_settings.update('INVITED_MODERATORS', value)
+
 
 class MockUser(object):
     def __init__(self):
@@ -27,7 +116,7 @@ class MockUser(object):
 
     def get_avatar_url(self, size):
         return ''
-    
+
     def get_full_name(self):
         return ''
 
@@ -71,7 +160,7 @@ class ActivityQuerySet(models.query.QuerySet):
             else:
                 logging.debug(
                             'method get_origin_post() not implemented for %s' \
-                            % unicode(post)
+                            % str(post)
                         )
         return list(origin_posts)
 
@@ -79,7 +168,7 @@ class ActivityQuerySet(models.query.QuerySet):
         """return a dictionary where keys are activity ids
         and values - content objects"""
         content_object_ids = defaultdict(list)# lists of c.object ids by c.types
-        activity_type_ids = dict()#links c.objects back to activity objects
+        activity_type_ids = {} #links c.objects back to activity objects
         for act in self:
             content_type_id = act.content_type_id
             object_id = act.object_id
@@ -87,8 +176,8 @@ class ActivityQuerySet(models.query.QuerySet):
             activity_type_ids[(content_type_id, object_id)] = act.id
 
         #3) get links from activity objects to content objects
-        objects_by_activity = dict()
-        for content_type_id, object_id_list in content_object_ids.items():
+        objects_by_activity = {}
+        for content_type_id, object_id_list in list(content_object_ids.items()):
             content_type = ContentType.objects.get_for_id(content_type_id)
             model_class = content_type.model_class()
             content_objects = model_class.objects.filter(id__in=object_id_list)
@@ -115,7 +204,7 @@ class ActivityManager(BaseQuerySetManager):
             ):
 
         #todo: automate this using python inspect module
-        kwargs = dict()
+        kwargs = {}
 
         kwargs['activity_type'] = const.TYPE_ACTIVITY_MENTION
 
@@ -163,7 +252,7 @@ class ActivityManager(BaseQuerySetManager):
         todo: implement better rich field lookups
         """
 
-        kwargs = dict()
+        kwargs = {}
 
         kwargs['activity_type'] = const.TYPE_ACTIVITY_MENTION
 
@@ -207,8 +296,8 @@ class ActivityAuditStatus(models.Model):
         (STATUS_NEW, 'new'),
         (STATUS_SEEN, 'seen')
     )
-    user = models.ForeignKey(User)
-    activity = models.ForeignKey('Activity')
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    activity = models.ForeignKey('Activity', on_delete=models.CASCADE)
     status = models.SmallIntegerField(choices=STATUS_CHOICES, default=STATUS_NEW)
 
     class Meta:
@@ -224,29 +313,30 @@ class Activity(models.Model):
     """
     We keep some history data for user activities
     """
-    user = models.ForeignKey(User)
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
     recipients = models.ManyToManyField(User, through=ActivityAuditStatus, related_name='incoming_activity')
     activity_type = models.SmallIntegerField(choices=const.TYPE_ACTIVITY, db_index=True)
     active_at = models.DateTimeField(default=timezone.now)
-    content_type = models.ForeignKey(ContentType)
+    content_type = models.ForeignKey(ContentType, on_delete=models.CASCADE)
     object_id = models.PositiveIntegerField(db_index=True)
-    content_object = generic.GenericForeignKey('content_type', 'object_id')
+    content_object = fields.GenericForeignKey('content_type', 'object_id')
 
     #todo: remove this denorm question field when Post model is set up
-    question = models.ForeignKey('Post', null=True)
+    question = models.ForeignKey('Post', null=True, on_delete=models.CASCADE)
 
-    is_auditted = models.BooleanField(default=False)
+    is_auditted = models.BooleanField(default=False) # todo: this field seems to be unused
     #add summary field.
     summary = models.TextField(default='')
 
     objects = ActivityManager()
 
-    def __unicode__(self):
-        return u'[%s] was active at %s' % (self.user.username, self.active_at)
+    def __str__(self):
+        activity_type = self.get_activity_type_display()
+        return f'Activity: {self.user.username}@{self.active_at.isoformat()}: {activity_type}'
 
     class Meta:
         app_label = 'askbot'
-        db_table = u'activity'
+        db_table = 'activity'
         verbose_name = _("activity")
         verbose_name_plural = _("activities")
 
@@ -254,10 +344,14 @@ class Activity(models.Model):
         """have to use a special method, because django does not allow
         auto-adding to M2M with "through" model
         """
-        for recipient in recipients:
-            #todo: may optimize for bulk addition
-            aas = ActivityAuditStatus(user=recipient, activity=self)
-            aas.save()
+        new_records = [
+            ActivityAuditStatus(user=recipient, activity=self)
+            for recipient in recipients
+        ]
+        if new_records:
+            ActivityAuditStatus.objects.bulk_create(
+                new_records, ignore_conflicts=True, batch_size=500
+            )
 
     def get_mentioned_user(self):
         assert(self.activity_type == const.TYPE_ACTIVITY_MENTION)
@@ -275,12 +369,8 @@ class Activity(models.Model):
         return self.content_object.get_absolute_url()
 
 class EmailFeedSettingManager(models.Manager):
-    def filter_subscribers(
-                        self,
-                        potential_subscribers = None,
-                        feed_type = None,
-                        frequency = None
-                    ):
+    def filter_subscribers(self, potential_subscribers=None,
+                           feed_type=None, frequency=None):
         """returns set of users who have matching subscriptions
         and if potential_subscribers is not none, search will
         be limited to only potential subscribers,
@@ -290,19 +380,23 @@ class EmailFeedSettingManager(models.Manager):
         todo: when EmailFeedSetting is merged into user table
         this method may become unnecessary
         """
-        matching_feeds = self.filter(
-                                        feed_type = feed_type,
-                                        frequency = frequency
-                                    )
+        matching_feeds = self.filter(feed_type=feed_type, frequency=frequency)
         if potential_subscribers is not None:
             matching_feeds = matching_feeds.filter(
-                            subscriber__in = potential_subscribers
+                            subscriber__in=potential_subscribers
                         )
-        subscriber_set = set()
-        for feed in matching_feeds:
-            subscriber_set.add(feed.subscriber)
+        subscriber_ids = set(
+            matching_feeds.values_list('subscriber_id', flat=True)
+        )
 
-        return subscriber_set
+        if not subscriber_ids:
+            return set()
+
+        return set(
+            User.objects.filter(
+                id__in=subscriber_ids
+            ).select_related('askbot_profile')
+        )
 
 
 class EmailFeedSetting(models.Model):
@@ -318,6 +412,7 @@ class EmailFeedSetting(models.Model):
             'q_ask',  # questions that user asks
             'q_all',  # enture forum, tag filtered
             'q_ans',  # questions that user answers
+            'q_noans', # questions without answers
             'q_sel',  # questions that user decides to follow
             'm_and_c'  # comments and mentions of user anywhere
     )
@@ -325,6 +420,7 @@ class EmailFeedSetting(models.Model):
     NO_EMAIL_SCHEDULE = {
         'q_ask': 'n',
         'q_ans': 'n',
+        'q_noans': 'n',
         'q_all': 'n',
         'q_sel': 'n',
         'm_and_c': 'n'
@@ -332,30 +428,34 @@ class EmailFeedSetting(models.Model):
     MAX_EMAIL_SCHEDULE = {
         'q_ask': 'i',
         'q_ans': 'i',
+        'q_noans': 'd',
         'q_all': 'i',
         'q_sel': 'i',
         'm_and_c': 'i'
     }
     # TODO: words
     FEED_TYPE_CHOICES = (
-        ('q_all', ugettext_lazy('Entire forum')),
-        ('q_ask', ugettext_lazy('Questions that I asked')),
-        ('q_ans', ugettext_lazy('Questions that I answered')),
-        ('q_sel', ugettext_lazy('Individually selected questions')),
-        ('m_and_c', ugettext_lazy('Mentions and comment responses')),
+        ('q_all', gettext_lazy('Entire forum')),
+        ('q_ask', gettext_lazy('Questions that I asked')),
+        ('q_ans', gettext_lazy('Questions that I answered')),
+        ('q_noans', gettext_lazy('Unanswered questions')),
+        ('q_sel', gettext_lazy('Individually selected questions')),
+        ('m_and_c', gettext_lazy('Mentions and comment responses')),
     )
     UPDATE_FREQUENCY = (
-        ('i', ugettext_lazy('Instantly')),
-        ('d', ugettext_lazy('Daily')),
-        ('w', ugettext_lazy('Weekly')),
-        ('n', ugettext_lazy('No email')),
+        ('i', gettext_lazy('Instantly')),
+        ('d', gettext_lazy('Daily')),
+        ('w', gettext_lazy('Weekly')),
+        ('n', gettext_lazy('No email')),
     )
 
-    subscriber = models.ForeignKey(User, related_name='notification_subscriptions')
+    subscriber = models.ForeignKey(User, related_name='notification_subscriptions', on_delete=models.CASCADE)
     feed_type = models.CharField(max_length=16, choices=FEED_TYPE_CHOICES)
     frequency = models.CharField(
-        max_length=8, choices=const.NOTIFICATION_DELIVERY_SCHEDULE_CHOICES,
-        default='n')
+                    max_length=8,
+                    choices=const.NOTIFICATION_DELIVERY_SCHEDULE_CHOICES,
+                    default='n'
+                )
     added_at = models.DateTimeField(auto_now_add=True)
     reported_at = models.DateTimeField(null=True)
 
@@ -367,14 +467,11 @@ class EmailFeedSetting(models.Model):
         app_label = 'askbot'
 
     def __str__(self):
-        return unicode(self).encode('utf-8')
-
-    def __unicode__(self):
         if self.reported_at is None:
             reported_at = "'not yet'"
         else:
             reported_at = '%s' % self.reported_at.strftime('%d/%m/%y %H:%M')
-        return u'Email feed for %s type=%s, frequency=%s, reported_at=%s' % (
+        return 'Email feed for %s type=%s, frequency=%s, reported_at=%s' % (
                                                      self.subscriber,
                                                      self.feed_type,
                                                      self.frequency,
@@ -418,8 +515,8 @@ class GroupMembership(models.Model):
     )
     ALL_LEVEL_CHOICES = LEVEL_CHOICES + ((NONE, 'none'),)
 
-    group = models.ForeignKey(AuthGroup, related_name='user_membership')
-    user = models.ForeignKey(User, related_name='group_membership')
+    group = models.ForeignKey(AuthGroup, related_name='user_membership', on_delete=models.CASCADE)
+    user = models.ForeignKey(User, related_name='group_membership', on_delete=models.CASCADE)
     level = models.SmallIntegerField(
         default=FULL, choices=LEVEL_CHOICES,)
 
@@ -451,13 +548,13 @@ class GroupQuerySet(models.query.QuerySet):
             name__startswith=PERSONAL_GROUP_NAME_PREFIX
         )
 
-    def get_for_user(self, user=None, private=False):
+    def get_for_user(self, user=None, private=False, used_for_analytics=False):
         gms = GroupMembership.objects.filter(user=user)
         if private:
             global_group = Group.objects.get_global_group()
             gms = gms.exclude(group=global_group)
         group_ids = gms.values_list('group_id', flat=True)
-        return Group.objects.filter(pk__in=group_ids)
+        return Group.objects.filter(pk__in=group_ids, used_for_analytics=used_for_analytics)
 
     def get_by_name(self, group_name = None):
         from askbot.models.tag import clean_group_name#todo - delete this
@@ -491,21 +588,31 @@ class GroupManager(BaseQuerySetManager):
             kwargs['group_ptr'] = group_ptr
         except AuthGroup.DoesNotExist:
             pass
-        return super(GroupManager, self).create(**kwargs)
+        return super().create(**kwargs)
 
-    def get_or_create(self, name=None, user=None, openness=None):
+    def get_or_create(self, name=None,
+                      user=None, openness=None,
+                      visibility=None, used_for_analytics=False):
         """creates a group tag or finds one, if exists"""
         #todo: here we might fill out the group profile
         try:
-            #iexact is important!!! b/c we don't want case variants
-            #of tags
+            #iexact is important!!! b/c we don't want case variants of groups
             group = self.get(name__iexact = name)
+            created = False
         except self.model.DoesNotExist:
+            default_visibility = askbot_settings.PER_EMAIL_DOMAIN_GROUP_DEFAULT_VISIBILITY
+            if visibility is None:
+                visibility = default_visibility
+
             if openness is None:
-                group = self.create(name=name)
-            else:
-                group = self.create(name=name, openness=openness)
-        return group
+                openness = self.model.DEFAULT_OPENNESS
+
+            group = self.create(name=name,
+                                openness=openness,
+                                visibility=visibility,
+                                used_for_analytics=used_for_analytics)
+            created = True
+        return group, created
 
 
 class Group(AuthGroup):
@@ -513,6 +620,7 @@ class Group(AuthGroup):
     OPEN = 0
     MODERATED = 1
     CLOSED = 2
+    DEFAULT_OPENNESS = CLOSED
     OPENNESS_CHOICES = (
         (OPEN, 'open'),
         (MODERATED, 'moderated'),
@@ -521,16 +629,20 @@ class Group(AuthGroup):
     logo_url = models.URLField(null=True)
     description = models.OneToOneField(
                     'Post', related_name='described_group',
-                    null=True, blank=True
+                    null=True, blank=True, on_delete=models.CASCADE
                 )
     moderate_email = models.BooleanField(default=True)
-    moderate_answers_to_enquirers = models.BooleanField(
-                        default=False,
-                        help_text=_('If true, answers to outsiders questions '
-                                    'will be shown to the enquirers only when '
-                                    'selected by the group moderators.')
-                    )
-    openness = models.SmallIntegerField(default=CLOSED, choices=OPENNESS_CHOICES)
+    can_post_questions = models.BooleanField(default=False)
+    can_post_answers = models.BooleanField(default=False)
+    can_post_comments = models.BooleanField(default=False)
+    can_upload_attachments = models.BooleanField(default=False)
+    can_upload_images = models.BooleanField(default=False)
+
+    openness = models.SmallIntegerField(default=DEFAULT_OPENNESS, choices=OPENNESS_CHOICES)
+    visibility = models.SmallIntegerField(default=const.GROUP_VISIBILITY_PUBLIC,
+                                          choices=const.GROUP_VISIBILITY_CHOICES)
+    used_for_analytics = models.BooleanField(default=False)
+
     # preapproved email addresses and domain names to auto-join groups
     # trick - the field is padded with space and all tokens are space separated
     preapproved_emails = models.TextField(
@@ -539,9 +651,6 @@ class Group(AuthGroup):
     preapproved_email_domains = models.TextField(
         null=True, blank=True, default='')
 
-    is_vip = models.BooleanField(
-        default=False,
-        help_text=_('Check to make members of this group site moderators'))
     read_only = models.BooleanField(default=False)
 
     objects = GroupManager()
@@ -552,7 +661,7 @@ class Group(AuthGroup):
 
     def get_moderators(self):
         """returns group moderators"""
-        user_filter = models.Q(is_superuser=True) | models.Q(askbot_profile__status='m')
+        user_filter = models.Q(askbot_profile__status__in=('m', 'd'))
         user_filter = user_filter & models.Q(group_membership__group__in=[self])
         return User.objects.filter(user_filter)
 
@@ -576,7 +685,7 @@ class Group(AuthGroup):
         templates. The value must match the verbose versions of the
         openness choices!!!
         """
-        if user.is_anonymous():
+        if user.is_anonymous:
             return 'closed'
 
         # A special case - automatic global group cannot be joined or left
@@ -615,30 +724,31 @@ class Group(AuthGroup):
         emails = functions.split_list(self.preapproved_emails)
         email_field = EmailField()
         try:
-            map(lambda v: email_field.clean(v), emails)
-        except exceptions.ValidationError:
+            list(map(email_field.clean, emails))
+        except exceptions.ValidationError as exc:
             raise exceptions.ValidationError(
                 _('Please give a list of valid email addresses.')
-            )
+            ) from exc
         self.preapproved_emails = ' ' + '\n'.join(emails) + ' '
 
         domains = functions.split_list(self.preapproved_email_domains)
         from askbot.forms import DomainNameField
         domain_field = DomainNameField()
         try:
-            map(lambda v: domain_field.clean(v), domains)
-        except exceptions.ValidationError:
+            list(map(domain_field.clean, domains))
+        except exceptions.ValidationError as exc:
             raise exceptions.ValidationError(
                 _('Please give a list of valid email domain names.')
-            )
+            ) from exc
         self.preapproved_email_domains = ' ' + '\n'.join(domains) + ' '
 
     def save(self, *args, **kwargs):
         self.clean()
-        super(Group, self).save(*args, **kwargs)
+        super().save(*args, **kwargs)
 
 
-class BulkTagSubscriptionManager(BaseQuerySetManager):
+class BulkTagSubscriptionManager(BaseQuerySetManager): # pylint: disable=too-few-public-methods
+    """Manager class for the BulkTagSubscription model"""
 
     def create(
                 self,
@@ -654,11 +764,10 @@ class BulkTagSubscriptionManager(BaseQuerySetManager):
         user_list = user_list or []
         group_list = group_list or []
 
-        new_object = super(BulkTagSubscriptionManager, self).create(**kwargs)
+        new_object = super().create(**kwargs)
         tag_name_list = []
 
         if tag_names:
-            from askbot.models.tag import get_tags_by_names
             tags, new_tag_names = get_tags_by_names(tag_names, language_code)
             if new_tag_names:
                 assert(tag_author)
@@ -666,7 +775,6 @@ class BulkTagSubscriptionManager(BaseQuerySetManager):
             tags_id_list= [tag.id for tag in tags]
             tag_name_list = [tag.name for tag in tags]
 
-            from askbot.models.tag import Tag
             new_tags = Tag.objects.create_in_bulk(
                                 tag_names=new_tag_names,
                                 user=tag_author,
@@ -699,6 +807,7 @@ class BulkTagSubscriptionManager(BaseQuerySetManager):
 
 
 class BulkTagSubscription(models.Model):
+    """Subscribes users in bulk to a list of tags"""
     date_added = models.DateField(auto_now_add=True)
     tags = models.ManyToManyField('Tag')
     users = models.ManyToManyField(User)
@@ -707,8 +816,10 @@ class BulkTagSubscription(models.Model):
     objects = BulkTagSubscriptionManager()
 
     def tag_list(self):
-        return [tag.name for tag in self.tags.all()]
+        """Returns list of tag names"""
+        return [tag.name for tag in self.tags.all()] # pylint: disable=no-member
 
-    class Meta:
+    class Meta: # pylint: disable=too-few-public-methods, missing-docstring
         app_label = 'askbot'
         ordering = ['-date_added']
+

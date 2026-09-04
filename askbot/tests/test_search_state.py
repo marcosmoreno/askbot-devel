@@ -1,7 +1,7 @@
 from askbot.tests.utils import AskbotTestCase
 from askbot.search.state_manager import SearchState
 import askbot.conf
-from django.core import urlresolvers
+from django.urls import reverse
 
 
 class SearchStateTests(AskbotTestCase):
@@ -237,7 +237,7 @@ class SearchStateTests(AskbotTestCase):
         self.assertTrue(ss.query is ss2.query)
 
         self.assertFalse(ss.tags is ss2.tags)
-        self.assertItemsEqual(ss.tags, ss2.tags)
+        self.assertCountEqual(ss.tags, ss2.tags)
 
         self.assertEqual(ss.author, 12)
         self.assertTrue(ss.author is ss2.author)
@@ -248,16 +248,16 @@ class SearchStateTests(AskbotTestCase):
         self.assertEqual(ss.stripped_query, 'hejho')
         self.assertTrue(ss.stripped_query is ss2.stripped_query)
 
-        self.assertItemsEqual(ss.query_tags, ['tag1', 'tag2'])
+        self.assertCountEqual(ss.query_tags, ['tag1', 'tag2'])
         self.assertFalse(ss.query_tags is ss2.query_tags)
 
-        self.assertItemsEqual(ss.query_users, ['user', 'user2'])
+        self.assertCountEqual(ss.query_users, ['user', 'user2'])
         self.assertFalse(ss.query_users is ss2.query_users)
 
         self.assertEqual(ss.query_title, 'what is this?')
         self.assertTrue(ss.query_title is ss2.query_title)
 
-        self.assertEqual(ss._questions_url, urlresolvers.reverse('questions'))
+        self.assertEqual(ss._questions_url, reverse('questions'))
         self.assertTrue(ss._questions_url is ss2._questions_url)
 
     def test_deep_copy_2(self):
@@ -268,8 +268,8 @@ class SearchStateTests(AskbotTestCase):
         ss2 = ss.deepcopy()
 
         self.assertFalse(ss.tags is ss2.tags)
-        self.assertItemsEqual(ss.tags, ss2.tags)
-        self.assertItemsEqual([], ss2.tags)
+        self.assertCountEqual(ss.tags, ss2.tags)
+        self.assertCountEqual([], ss2.tags)
 
     def test_cannot_add_already_added_tag(self):
         ss = SearchState.get_empty().add_tag('double').add_tag('double')
@@ -285,8 +285,10 @@ class SearchStateTests(AskbotTestCase):
             page=None,
             user_logged_in=False
         )
+        # Tags are deduplicated AND sorted alphabetically for canonical URLs
+        # (collapses N! permutations into one cacheable URL).
         self.assertEqual(
-            'scope:all/sort:activity-desc/tags:valid1,dupped,valid2/page:1/',
+            'scope:all/sort:activity-desc/tags:dupped,valid1,valid2/page:1/',
             ss.query_string()
         )
 

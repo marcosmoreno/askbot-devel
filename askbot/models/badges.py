@@ -22,8 +22,9 @@ import datetime
 from django.template.defaultfilters import slugify
 from django.conf import settings as django_settings
 from django.contrib.contenttypes.models import ContentType
-from django.utils.translation import ugettext as _
-from django.utils.translation import ungettext
+from django.utils.translation import gettext as _
+from django.utils.translation import ngettext
+from django.utils import timezone
 from django.dispatch import Signal
 
 from askbot import const
@@ -149,7 +150,7 @@ class PeerPressure(Badge):
 
     def __init__(self):
         description = _(
-            u'Deleted own post with %(votes)s or more downvotes'
+            'Deleted own post with %(votes)s or more downvotes'
         ) % {'votes': askbot_settings.PEER_PRESSURE_BADGE_MIN_DOWNVOTES}
         super(PeerPressure, self).__init__(
             name=_('Peer Pressure'), description=description,
@@ -807,7 +808,7 @@ class Taxonomist(Badge):
     def __init__(self):
         super(Taxonomist, self).__init__(
             name=_('Taxonomist'), level=const.SILVER_BADGE,
-            multiple=False, description=ungettext(
+            multiple=False, description=ngettext(
                 'Created a tag used %(num)s time',
                 'Created a tag used %(num)s times',
                 askbot_settings.TAXONOMIST_BADGE_MIN_USE_COUNT
@@ -818,6 +819,38 @@ class Taxonomist(Badge):
         taxonomist_threshold = askbot_settings.TAXONOMIST_BADGE_MIN_USE_COUNT
         if tag.used_count == taxonomist_threshold:
             return self.award(tag.created_by, tag, timestamp)
+        return False
+
+
+class RapidResponder(Badge):
+    key = 'rapid-responder'
+
+    def __init__(self):
+        description = _('Responded to question within %(max_delay)s hours') % {
+            'max_delay': askbot_settings.RAPID_RESPONDER_BADGE_MAX_DELAY,
+        }
+        super(RapidResponder, self).__init__(
+            name=_('Rapid Responder'), level=const.SILVER_BADGE,
+            description=description, multiple=True)
+
+    def consider_award(self, actor=None, context_object=None, timestamp=None):
+        if context_object.post_type != 'answer':
+            return False
+        answer = context_object
+        question = answer.thread._question_post()
+        delta = datetime.timedelta(hours=askbot_settings.RAPID_RESPONDER_BADGE_MAX_DELAY)
+        if answer.added_at - question.added_at <= delta:
+            return self.award(answer.author, answer, timestamp)
+        return False
+
+    @classmethod
+    def expire(cls, award):
+        """special method to check if badge should be expired and expire it"""
+        now = timezone.now()
+        expire_date = award.awarded_at + datetime.timedelta(askbot_settings.RAPID_RESPONDER_BADGE_EXPIRES)
+        if now > expire_date:
+            award.delete()
+            return True
         return False
 
 
@@ -839,7 +872,7 @@ extra badges from stackexchange
 * mortarboard - hit the daily reputation cap for the first time (s)
 * populist - provided an answer that outscored an accepted answer two-fold or by n points, whichever is higher (m)
 * reversal - provided an answer with +n points to a question of -m points
-    (_('Yearling'), 2, _('yearling'), _('Active member for a year'), False, 0),
+   (_('Yearling'), 2, _('yearling'), _('Active member for a year'), False, 0),
 
 
     (_('Generalist'), 2, _('generalist'), _('Active in many different tags'), False, 0),
@@ -856,7 +889,7 @@ def get_badge_keys(badges):
 
 def get_badges_dict(e_to_b):
     badges = set()
-    for event_badges in e_to_b.values():
+    for event_badges in list(e_to_b.values()):
         badges.update(set(event_badges))
 
     badges_dict = dict()
@@ -899,7 +932,7 @@ EVENTS_TO_BADGES = {
     'edit_answer': (Editor, AssociateEditor),
     'edit_question': (Editor, AssociateEditor),
     'flag_post': (CitizenPatrol,),
-    'post_answer': (Necromancer,),
+    'post_answer': (Necromancer, RapidResponder,),
     'post_comment': (Commentator,),
     'post_question': (),
     'retag_question': (Organizer,),
@@ -941,15 +974,14 @@ def init_badges():
     # TODO: maybe better to redo individual badges
     # so that get_stored_data() is called implicitly
     # from the __init__ function?
-    for key in BADGES.keys():
+    for key in list(BADGES.keys()):
         get_badge(key).get_stored_data()
     # remove any badges from the database
     # that are no longer in the BADGES dictionary
     from askbot.models.repute import BadgeData
-    BadgeData.objects.exclude(slug__in=map(slugify, BADGES.keys())).delete()
+    BadgeData.objects.exclude(slug__in=list(map(slugify, list(BADGES.keys())))).delete()
 
-award_badges_signal = Signal(providing_args=[
-    'actor', 'event', 'context_object', 'timestamp'])
+award_badges_signal = Signal()
 # actor - user who triggers the event
 # event - string name of the event, e.g 'downvote'
 # context_object - database object related to the event, e.g. question

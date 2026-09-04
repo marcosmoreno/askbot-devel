@@ -1,6 +1,282 @@
 Changes in Askbot
 =================
 
+0.13.0 (May 30, 2026)
+---------------------
+* Upgraded to Django 5.2 LTS while keeping Django 4.2 supported.
+  Django pin is now ``>=4.2,<5.3``. Replaced removed APIs
+  (``get_storage_class``, ``ping_google``), made ``_fixture_setup``
+  compatible with Django 5.x's classmethod signature, and adjusted
+  timezone handling for ``USE_TZ=True`` defaults. ``tox.ini`` and the
+  GitHub Actions workflow now exercise both ``django42`` and ``django52``
+  factors, and the workflow also runs the django_authopenid tests.
+
+* Bumped ``django-livesettings3`` to ``>=1.7.0,<2`` for Django 5.x support;
+  still works under Django 4.2.
+
+* Lifted the ``Jinja2<3.1`` cap to ``>=3.1,<4`` and tightened
+  ``django-jinja`` to ``>=2.11,<3``. Required because modern
+  ``django-jinja`` depends on ``Jinja2>=3``.
+
+* Batched dep bumps for Django 5.x compat (all retain Django 4.2
+  support): ``celery>=5.5,<6``, ``django-appconf>=1.2``,
+  ``django-avatar>=9.0``, ``django-compressor>=4.6,<5``,
+  ``django-countries>=8.2``, ``django-picklefield>=3.2,<4``,
+  ``django-ratelimit>=4.1,<5``, ``jinja2-simple-tags>=0.6,<1``,
+  ``pyjwt>=2.10,<3``.
+
+* Bumped ``django-recaptcha`` to ``>=4.1,<5``. The package namespace
+  was renamed upstream from ``captcha`` to ``django_recaptcha``;
+  imports, ``INSTALLED_APPS``, ``JINJA2_TEMPLATES``,
+  ``SILENCED_SYSTEM_CHECKS``, and the startup checks were updated
+  accordingly.
+
+* Removed the unused ``group_messaging`` dependency; a migration drops its
+  tables if present.
+
+0.12.9 (May 24, 2026)
+---------------------
+* Optimized multi-tag question search: replaced per-tag JOINs with a single subquery,
+  provides large speedup for looking up questions via multiple tags.
+
+* When searching by tags, only one order of tags is accepted as canonical.
+  With caching middleware enabled, saves resources when serving
+  anonymous tagged question list page views.
+
+* Added per subnet rate-limiting feature that allows
+  limiting three types of requests: get requests,
+  post requests from watched users
+  and user account registrations.
+
+  Rate limiting relies on the django-ratelimit app, which counts the requests
+  per subnet and stores this count in the shared cache.
+
+  When the user is rate-limited, they see a page advising them to slow down
+  or a similar banner message - when rate limited is detected
+  during an AJAX request. In the user registration flows this error
+  is shown as the form feedback.
+
+  Rate limited responses are with the 429 status code, with a
+  retry-after header set (in seconds).
+
+  Maximum number of requests per window can be adjusted.
+  The window durations are fixed: 1 minute for the get requests,
+  1 hour for the posts and 1 day for the registrations.
+
+  The size of the subnet can be set either per ip /32, local /24,
+  or regional /16, which can be adjusted in the livesettings.
+
+  IPv4 and IPv6 networks are supported.
+
+  Allow-listed IP ranges can be added in the livesettings.
+
+  High-reputation users can be allowed to bypass for the watched-user
+  post rate limit, controlled by two new livesettings.
+
+  The livesettings admin pages are exempt from request rate limiting.
+
+* Closed-forum-mode bypass via ``ASKBOT_INTERNAL_IPS`` now honors
+  CIDR ranges and IPv6 addresses (including IPv4-mapped IPv6).
+* Removed legacy ``askbot/container/`` directory and ``askbot_requirements.txt``
+* Added test to verify ``askbot.REQUIREMENTS`` and ``pyproject.toml`` dependencies stay in sync
+* Bumped ``urllib3`` dependency from ``>=1.21.1,<1.27`` to ``>=2,<3``
+* Fixed ``encode_jwt``/``decode_jwt`` compatibility with PyJWT 2.x
+* Added tests for ``encode_jwt`` and ``decode_jwt``
+* Fixed Contributors sidebar not updating when user uploads avatar,
+  switches to gravatar, enables default avatar, or disables gravatar
+* Optimized instant email notifications: replaced per-recipient iteration
+  with query sets and batched celery tasks to avoid OOM eviction and
+  task timeout issues
+* Similarly, optimized ``send_email_alerts`` query performance
+* Improved test coverage for the instant email alerts sending functionalities
+* Added optional live info-level logging of instant email alerts,
+  via a new boolean livesetting DEBUG_EMAIL_ALERTS
+* Fixed an issue in the markdown editor, where two different files
+  could not be uploaded in one editing session.
+* Added ability to control who can access api v1.
+* Fixed the support of the JSON session serializer,
+  changed the default session serializer from Pickle to JSON
+* Added the option to require validation of email address when users change it.
+  Controlled by the ``EMAIL_VALIDATION_REQUIRED`` livesetting.
+* Changed the default of the ``EMAIL_VALIDATION_REQUIRED`` livesetting from ``False`` to ``True``.
+* Fixed: AJAX-injected system message banners now use the same markup as page-load banners.
+
+0.12.8 (Mar 15, 2026)
+---------------------
+* Built-in analytics: tracks user activity (questions, answers, votes,
+  views, time on site) with session tracking middleware, hourly/daily
+  summarization, and web-based reporting views for administrators and
+  moderators
+* Added analytics documentation page
+* Updated documentation site navigation links
+* Global group ('everyone') is now marked for analytics by default
+
+0.12.7 (Mar 10, 2026)
+---------------------
+* Bug fix: fixed typo in ``django_authopenid`` ``LoginMethod`` where
+  ``self.mode`` was used instead of ``self.mod`` when checking for
+  ``OIDC_CUSTOM_SCOPES``, which prevented custom OIDC scopes from
+  being loaded
+
+0.12.6 (Feb 16, 2026)
+---------------------
+* Migrated from ``setup.py`` to ``pyproject.toml`` for packaging;
+  removed ``setup.py`` and ``askbot_requirements.txt``
+* Bumped minimum Python version to 3.10
+* Upgraded ``django-followit`` to 0.7
+* Downvote comment prompt: when a user downvotes a post, a modal
+  encourages them to leave a comment explaining why — with animated
+  transition to a comment editor, existing comments preview, and
+  auto-scroll to the new comment, once posted
+* Consolidated Svelte build into shared ``askbot/media/svelte/``
+  directory with multi-entry rollup config
+* Upgraded Svelte 4 to 5 with full runes migration across all components
+* Removed ``django-robots`` dependency — deployers can install it separately if needed
+
+0.12.5 (Feb 8, 2026)
+--------------------
+* No features changed, removed references to Django 2 from setup.py
+
+0.12.4 (Feb 8, 2026)
+--------------------
+* Major upgrade of Markdown support throughout the application
+* Backend: migrated from markdown2 to markdown-it with plugins for
+  tables, strikethrough, footnotes, task lists, and syntax highlighting
+* Frontend: migrated from Showdown to markdown-it.js, ensuring
+  server-client rendering parity
+* MathJax v2 support with Stack Exchange-style preprocessing —
+  LaTeX math in posts via ``$...$`` and ``$$...$$`` delimiters
+* Syntax highlighting: upgraded highlight.js to v11.11.1, added
+  Pygments backend highlighting with frontend/backend theme parity
+* Enabled automatic URL linkification with smart link truncation
+* Auto-link patterns: configurable URL shortcuts (e.g. ``gh:123``)
+* Video embedding redesigned as clickable links with modal player,
+  supports YouTube, Vimeo, and Dailymotion
+* New editor help panel with tabbed interface, i18n support,
+  keyboard navigation, and responsive overflow handling
+* Editor dialogs refactored: replaced inline WMD prompts with
+  ModalDialog-based dialogs for links and file uploads
+* Editor: automatic indented-to-fenced code block conversion
+* Unified Python/JS HTML sanitizer configuration with DOMPurify
+* Consolidated HTML allowlist; added ``details``/``summary`` elements
+* Comprehensive CSS styling for user-contributed content with
+  17 CSS variables (``--uc-*`` prefix) for theming
+* Code-friendly emphasis mode: only ``*`` triggers emphasis,
+  underscores are left literal
+* Task list checkbox styling in rendered markdown
+* Fixed long titles overflowing into sidebar
+* Scrolls textarea to top when editor opens
+
+0.12.3 (Jan 26, 2026)
+---------------------
+* Supports Python 3.12
+* Admin Tags: tags can be designated as "admin tags" with special styling and management,
+  setting ``ASKBOT_USER_CAN_MANAGE_ADMIN_TAGS_FUNCTION`` controls access
+* OIDC authentication: added setting ``OIDC_AUTHORIZATION_FUNCTION`` for custom authorization,
+  OIDC now uses access token instead of id_token
+* Added Django signals ``best_answer_accepted`` and ``best_answer_unaccepted``
+* Added setting ``WHO_CAN_ANONYMIZE_ACCOUNTS``
+* Added setting ``ASKBOT_FEDERATED_LOGIN_EMAIL_EDITABLE``
+* Custom user profile tab: added ``USER_IS_AUTHORIZED_FUNC`` option
+* Added ``email_is_confidential`` field to UserProfile model
+* HTML emails now use premailer for inline CSS styling
+* Added ``HeadRequestMiddleware`` to handle HEAD requests
+* Retired ``ez_setup.py``
+* Pre-commit configuration and GitHub Actions tests added
+* Admin site: allows filtering user profiles by status and email_is_confidential
+* Non-admins cannot terminate admin or moderator accounts
+* Publish/unpublish button shown for group private posts when user has permission
+* Security fix: authorization bypass in avatar views where URL string parameters
+  were compared directly to integer user IDs
+* Bug fix: undeleting a question was not working properly
+* Bug fix: unsubscribe URL no longer breaks if user not found with given email
+* Bug fix: privacy setting is maintained when editing a post via ajax
+* Bug fix: delete tag when removing admin tag
+* XSS fix: adds escape to closed_question_info in templates
+* Bumps django-livesettings3 to 1.6.3
+
+0.12.2 (Jul 29, 2023)
+---------------------
+* improves installation process, supports Python 3.11
+* Allows customization of the question close reasons in the settings
+
+0.12.1 (Jul 21, 2023)
+---------------------
+* bug fixes with library versions
+
+0.12.0 (Jul 19, 2023)
+---------------------
+* Added support for Django 4.2
+* Removed all TinyMCE code
+* Added ASKBOT_SPAM_CHECKER_TIMEOUT_SECONDS parameter to settings.py,
+  defaults to 1s
+* Made moderation queue actions snappier by using optimistic UI update
+* fixes creation of duplicate moderation queue records when
+  link and image moderation is enabled.
+* all uses of is_spam function is guarded by the check for
+  askbot.conf.SPAM_FILTER_ENABLED setting
+
+0.11.8 (Jul 24, 2023)
+---------------------
+* Allows customization of the question close reasons in the settings,
+  this feature is not merged into v0.12.x until 0.12.2
+* Added ASKBOT_SPAM_CHECKER_TIMEOUT_SECONDS parameter to settings.py,
+  defaults to 1s
+* Made moderation queue actions snappier by using optimistic UI update
+* fixes creation of duplicate moderation queue records when
+  link and image moderation is enabled.
+* all uses of is_spam function is guarded by the check for
+  askbot.conf.SPAM_FILTER_ENABLED setting
+
+0.11.7 (May 15, 2023)
+---------------------
+* PR #928 - upgrades django-avatar (Bruno Guimarães, @brunobastosg)
+
+0.11.6 (May 8, 2023)
+--------------------
+* added setting ASKBOT_SPAM_CHECKER_FUNCTION - default is
+  `askbot.spam_checker.akismet_spam_checker.is_spam`
+* added a second spam checker alternative:
+  `askbot.spam_checker.askbot_spam_checker.is_spam`
+  which needs settings: `ASKBOT_SPAM_CHECKER_API_KEY`,
+  `ASKBOT_SPAM_CHECKER_API_URL`
+* added a management command `askbot_get_spam_training_set`
+* added fields to Post model: `marked_as_spam`, `marked_as_spam_at`, `marked_as_spam_by`
+  these fields are populated when marking user as spammer in the moderation queue
+* added signal `askbot.signals.posts_marked_as_spam`
+
+0.11.5 (Apr 12, 2023)
+-------------------
+* Works with python 3.7-3.10
+* Rewrites the base theme.
+* New theme is responsive across all reasonable screen sizes
+* When groups are enabled - per group permissions
+  to post questions/answers/comments are respected
+* Adds settings "Allow uploading file attachments in posts"
+  and "Allow uploading images in posts"
+  to the "Forum data rules" section of the admin settings page
+* Adds question close reasons: "question is considered as answered" and
+  "closed as inactive"
+* Supports OIDC authentication protocol
+* Adds blank state for the moderation queue
+* Adds management command `askbot_markdownify_content` - converts
+  html markup to markdown
+* When groups are enabled, per-group permissions added:
+  - can upload attachments
+  - can upload images
+* Bug, PEP8 fixes
+
+0.11.3, 0.11.4 (Apr 7, 2023)
+--------------
+* Changelog not recorded, see update for 0.11.5
+
+0.11.2 (Jan 21, 2022)
+------------------
+* Supports Django up to version 3, tested with Python up to 3.7
+* Anonymize data and disable accounts
+* GDPR compliance (export data, cancel/request to cancel account)
+* Updated Facebook login Api to v3.2
+
 0.10.2 (Dec 21, 2016)
 ---------------------
 * Bug fixes for the previous version
@@ -37,14 +313,13 @@ NOTE::
   Releases 0.10.x support Django 1.8, 0.9.x - Django 1.7,
   0.7.x support Django 1.5, 0.8.x - 1.6 and to be used
   only to migrate to the higher versions of the Django framework
-  from 1.5. See https://pypi.python.org/pypi/askbot/ 
+  from 1.5. See https://pypi.python.org/pypi/askbot/
   to download the latest available version.
 
 0.7.53 (Apr 22, 2015)
 ---------------------
 * Use prompt placeholders on all registration forms
 * Disable Google login by default because it is now OAuth2
-
 
 0.7.52 (Apr 19, 2015)
 ---------------------
@@ -84,7 +359,7 @@ NOTE::
 * Allowed localized site settings
 * Added management command `askbot_clear_moderation_queue`
 * Admins and Moderators can merge questions.
-* Improved moderation modes: flags, audit, premoderation. 
+* Improved moderation modes: flags, audit, premoderation.
   Watched user status, IP blocking, mass content removal.
 * Allow bulk deletion of user content simultaneously with blocking
 * Allow custom destination url under the logo
@@ -97,7 +372,7 @@ NOTE::
 * Added Read-Only mode for the site in the "access control" section.
 * Added `askbot_add_osqa_content` management command.
 * Management command to add data from other Askbot site.
-* Allowed simple overrides of livesettings with `ASKBOT_...` prefixed 
+* Allowed simple overrides of livesettings with `ASKBOT_...` prefixed
   variables in the `settings.py` file.
 
 0.7.49 (Sep 19, 2013)
@@ -168,7 +443,7 @@ NOTE::
 * Added minimum reputation setting to accept any answer as correct (Evgeny)
 * Added "VIP" option to groups - if checked, all posts belong to the group and users of that group in the future will be able to moderate those posts. Moderation features for VIP group are in progress (Evgeny)
 * Added setting `NOTIFICATION_DELAY_TIME` to use with enabled celery daemon (Adolfo)
-* Added setting `ASKBOT_INTERNAL_IPS` - to allow anonymous access to 
+* Added setting `ASKBOT_INTERNAL_IPS` - to allow anonymous access to
   closed sites from dedicated IP addresses (Evgeny)
 * Moved default skin from `askbot/skins/default` to simply `askbot` (Evgeny)
 * Repost comment as answer (Adolfo)
@@ -209,7 +484,7 @@ NOTE::
 * Enabling/disabling the badges system (Evgeny)
 * Created a basic post moderation feature (Evgeny)
 * Created a way to specify reasons for rejecting posts in a modal dialog (Evgeny)
-* A number of bug fixes (Adolfo Fitoria, Jim Tittsler, 
+* A number of bug fixes (Adolfo Fitoria, Jim Tittsler,
   Evgeny Fadeev, Robin Stocker, Radim Řehůřek, Silvio Heuberger)
 
 0.7.41, 0.7.42 (April 21, 2012)
@@ -253,7 +528,7 @@ NOTE::
 
 0.7.37 (Jan 8, 2012)
 --------------------
-* added basic slugification treatment to question titles with 
+* added basic slugification treatment to question titles with
   ``ALLOW_UNICODE_SLUGS = True`` (Evgeny)
 * added verification of the project directory name to
   make sure it does not contain a `.` (dot) symbol (Evgeny)
@@ -365,7 +640,7 @@ For these versions we did not keep consistent record of features.
 
 0.7.22
 ------
-* Media resource revision is now incremented 
+* Media resource revision is now incremented
   automatically any time when media is updated (Adolfo Fitoria, Evgeny Fadeev)
 * First user automatically becomes site administrator (Adolfo Fitoria)
 * Avatar displayed on the sidebar can be controlled with livesettings.(Adolfo Fitoria, Evgeny Fadeev)

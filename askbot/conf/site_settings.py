@@ -2,14 +2,14 @@
 Q&A website settings - title, desctiption, basic urls
 keywords
 """
-from urlparse import urlparse
+from urllib.parse import urlparse
 
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from django.conf import settings as django_settings
 
 from askbot.conf.settings_wrapper import settings
 from askbot.conf.super_groups import CONTENT_AND_UI
-from askbot.deps import livesettings
+from livesettings import values as livesettings
 
 
 QA_SITE_SETTINGS = livesettings.ConfigurationGroup(
@@ -31,7 +31,7 @@ settings.register(
     livesettings.StringValue(
         QA_SITE_SETTINGS,
         'APP_KEYWORDS',
-        default=u'Askbot,forum,community',
+        default='Askbot,forum,community',
         description=_('Comma separated list of Q&A site keywords')
     )
 )
@@ -40,8 +40,17 @@ settings.register(
     livesettings.StringValue(
         QA_SITE_SETTINGS,
         'APP_COPYRIGHT',
-        default='Copyright Askbot, 2010-2011.',
+        default='Copyright Askbot',
         description=_('Copyright message to show in the footer')
+    )
+)
+
+settings.register(
+    livesettings.IntegerValue(
+        QA_SITE_SETTINGS,
+        'APP_COPYRIGHT_YEAR_START',
+        default=2010,
+        description=_('Starting year of Copyright')
     )
 )
 

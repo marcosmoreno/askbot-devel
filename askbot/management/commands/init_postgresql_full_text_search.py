@@ -1,12 +1,22 @@
-from django.core.management.base import NoArgsCommand
+from django.core.management import BaseCommand
+from django.db import connection as conn
 import os.path
 import askbot
 from askbot.search.postgresql import setup_full_text_search
 
-class Command(NoArgsCommand):
+class Command(BaseCommand):
 
-    def handle_noargs(self, **options):
+    def add_arguments(self, parser):
+        parser.add_argument('--interactive',
+                            action='store_true',
+                            dest='interactive',
+                            default=False,
+                            help='force the issue'
+                           )
+
+    def handle(self, **options):
         dir_path = askbot.get_install_directory()
+
         script_path = os.path.join(
                             dir_path,
                             'search',

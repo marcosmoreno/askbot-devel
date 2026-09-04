@@ -1,3 +1,4 @@
+
 #todo: http://stackoverflow.com/questions/837828/how-to-use-a-slug-in-django
 DEBUGME = False
 import os
@@ -24,7 +25,7 @@ try:
 except ImportError:
     from askbot.models.message import Message as DjangoMessage
 
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import gettext_lazy as _
 from askbot.utils.console import ProgressBar
 from askbot.utils.slug import slugify
 from askbot.models.badges import award_badges_signal, award_badges
@@ -125,14 +126,14 @@ class X(object):#
     }
 
     close_reason_map = {
-        1:1,#duplicate
-        2:2,#off-topic
-        3:3,#subjective and argumentative
-        4:4,#not a real question
-        5:7,#offensive
-        6:6,#irrelevant or outdated question
-        7:9,#too localized
-        10:8,#spam
+        1: _('duplicate question'),
+        2: _('question is off-topic or not relevant'),
+        3: _('too subjective and argumentative'),
+        4: _('not a real question'),
+        5: _('question contains offensive or malicious remarks'),
+        6: _('question is not relevant or outdated'),
+        7: _('too localized'),
+        10: _('spam or advertising'),
     }
 
     @classmethod
@@ -178,7 +179,7 @@ class X(object):#
     def get_close_reason(cls, se_reason):
         #todo: this is a guess - have not seen real data
         se_reason = int(se_reason)
-        return cls.close_reason_map[se_reason]
+        return str(cls.close_reason_map[se_reason])
 
     @classmethod
     def get_user(cls, se_user):
@@ -191,7 +192,7 @@ class X(object):#
         for rev in rev_group:
             rev_type = cls.get_post_revision_type(rev)
             rev_types[rev_type] = 1
-        rev_types = rev_types.keys()
+        rev_types = list(rev_types.keys())
 
         #make sure that exclusive rev modes are not mixed
         exclusive = cls.exclusive_revision_modes
@@ -258,7 +259,7 @@ class X(object):#
     #crude method of getting id provider name from the url
     @classmethod
     def get_openid_provider_name(cls, openid_url):
-        openid_str = unicode(openid_url)
+        openid_str = str(openid_url)
         bits = openid_str.split('/')
         base_url = bits[2] #assume this is base url
         url_bits = base_url.split('.')
@@ -296,20 +297,18 @@ it may be helpful to split this procedure in two:\n
 """
     args = 'se_dump_dir'
 
-    option_list = BaseCommand.option_list + (
-        make_option('-r', '--read-dump',
+    def add_arguments(self, parser):
+        parser.add_argument(
+            '-r', '--read-dump',
             action='store_true',
             dest='read_dump',
             default=False,
-            help='Only read the the dump'
-        ),
-        make_option('-p', '--process-data',
+            help='Only read the the dump')
+        parser.add_argument('-p', '--process-data',
             action='store_true',
             dest='process_data',
             default=False,
-            help='Only process the data, assuming that the dump is loaded'
-        )
-    )
+            help='Only process the data, assuming that the dump is loaded')
 
     def handle(self, *arg, **kwarg):
 
@@ -331,7 +330,7 @@ it may be helpful to split this procedure in two:\n
         if not importer_is_ready():
             raise CommandError(
                 "Looks like stackexchange tables are not yet initialized in the database.\n"
-                "Please, run command: \npython manage.py syncdb\n"
+                "Please, run command: \npython manage.py migrate\n"
                 "then import the data."
             )
 
@@ -350,8 +349,8 @@ it may be helpful to split this procedure in two:\n
                 transaction.commit()
                 time_after = timezone.now()
                 if DEBUGME == True:
-                    print time_after - time_before
-                    print HEAP.heap()
+                    print(time_after - time_before)
+                    print(HEAP.heap())
 
         if kwarg['process_data'] is False:
             #that means we just wanted to load the xml dump to
@@ -369,36 +368,36 @@ it may be helpful to split this procedure in two:\n
         self.save_askbot_message_id_list()
 
         #transfer data into ASKBOT tables
-        print 'Transferring users...'
+        print('Transferring users...')
         self.transfer_users()
         transaction.commit()
-        print 'done.'
-        print 'Transferring content edits...'
+        print('done.')
+        print('Transferring content edits...')
         sys.stdout.flush()
         self.transfer_question_and_answer_activity()
         transaction.commit()
-        print 'done.'
-        print 'Transferring view counts...'
+        print('done.')
+        print('Transferring view counts...')
         sys.stdout.flush()
         self.transfer_question_view_counts()
         transaction.commit()
-        print 'done.'
-        print 'Transferring comments...'
+        print('done.')
+        print('Transferring comments...')
         sys.stdout.flush()
         self.transfer_comments()
         transaction.commit()
-        print 'done.'
-        print 'Transferring badges and badge awards...'
+        print('done.')
+        print('Transferring badges and badge awards...')
         sys.stdout.flush()
         self.transfer_badges()
         transaction.commit()
-        print 'done.'
-        print 'Transferring Q&A votes...'
+        print('done.')
+        print('Transferring Q&A votes...')
         sys.stdout.flush()
         self.transfer_QA_votes()#includes favorites, accepts and flags
         transaction.commit()
-        print 'done.'
-        print 'Transferring comment votes...'
+        print('done.')
+        print('Transferring comment votes...')
         sys.stdout.flush()
         self.transfer_comment_votes()
         transaction.commit()
@@ -415,7 +414,7 @@ it may be helpful to split this procedure in two:\n
         transaction.commit()
         self.transfer_meta_pages()
         transaction.commit()
-        print 'done.'
+        print('done.')
 
     def open_dump(self, path):
         """open the zipfile, raise error if it
@@ -535,23 +534,17 @@ it may be helpful to split this procedure in two:\n
         if post is None:
             return
         if post_type == 'Question':
-            edited_by.edit_question(
-                            question = post,
-                            title = title,
-                            body_text = text,
-                            tags = tags,
-                            revision_comment = comment,
-                            timestamp = edited_at,
-                            force = True #avoid insufficient rep issue on imports
-                        )
+            edited_by.edit_question(question=post,
+                                    title=title,
+                                    body_text=text,
+                                    tags=tags,
+                                    revision_comment=comment,
+                                    timestamp=edited_at,
+                                    force=True) #avoid insufficient rep issue on imports
         elif post_type == 'Answer':
-            #todo: why here use "apply_edit" and not "edit answer"?
-            post.apply_edit(
-                edited_at = edited_at,
-                edited_by = edited_by,
-                text = text,
-                comment = comment,
-            )
+            edited_by.edit_answer(timestamp=edited_at,
+                                  body_text=text,
+                                  revision_comment=comment)
 
     def _make_post_wiki(self, rev_group):
         #todo: untested
@@ -616,9 +609,9 @@ it may be helpful to split this procedure in two:\n
                 if p is None:
                     return
                 if rev_type == 'Post Closed':
-                    p.thread.set_closed_status(closed=True, closed_at=t, closed_by=u, close_reason=X.get_close_reason(rev.comment))
+                    p.thread.set_closed_status(closed=True, closed_at=t, closed_by=u, close_reason_text=X.get_close_reason(rev.comment))
                 elif rev_type == 'Post Reopened':
-                    p.thread.set_closed_status(closed=False, closed_at=None, closed_by=None, close_reason=None)
+                    p.thread.set_closed_status(closed=False, closed_at=None, closed_by=None, close_reason_text='')
                 self.mark_activity(p,u,t)
                 p.save()
                 return
@@ -712,7 +705,7 @@ it may be helpful to split this procedure in two:\n
         comments = se.PostComment.objects.all()
         for se_c in ProgressBar(comments.iterator(), comments.count()):
             if se_c.deletion_date:
-                print 'Warning deleted comment %d dropped' % se_c.id
+                print('Warning deleted comment %d dropped' % se_c.id)
                 sys.stdout.flush()
                 continue
             se_post = se_c.post
@@ -746,7 +739,7 @@ it may be helpful to split this procedure in two:\n
                 #and drop it
                 self._missing_badges[name] = 0
                 if len(se_b.description) > 300:
-                    print 'Warning truncated description for badge %d' % se_b.id
+                    print('Warning truncated description for badge %d' % se_b.id)
                     sys.stdout.flush()
 
     def _award_badges(self):
@@ -780,10 +773,10 @@ it may be helpful to split this procedure in two:\n
 
     def _report_missing_badges(self):
         d = self._missing_badges
-        unused = [name for name in d.keys() if d[name] == 0]
-        dropped = [unidecode(name) for name in d.keys() if d[name] > 0]
-        print 'Warning - following unsupported badges were dropped:'
-        print ', '.join(dropped)
+        unused = [name for name in list(d.keys()) if d[name] == 0]
+        dropped = [unidecode(name) for name in list(d.keys()) if d[name] > 0]
+        print('Warning - following unsupported badges were dropped:')
+        print(', '.join(dropped))
         sys.stdout.flush()
 
     def transfer_badges(self):
@@ -879,7 +872,7 @@ it may be helpful to split this procedure in two:\n
         xml_data = self.zipfile.read(xml_path)
 
         tree = et.fromstring(xml_data)
-        print 'loading from %s to %s' % (xml_path, table_name)
+        print('loading from %s to %s' % (xml_path, table_name))
         model = models.get_model('stackexchange', table_name)
         i = 0
         rows = tree.findall('.//row')
@@ -890,14 +883,14 @@ it may be helpful to split this procedure in two:\n
                 field_name = se_parser.parse_field_name(col.tag)
                 try:
                     field_type = model._meta.get_field(field_name)
-                except fields.FieldDoesNotExist, e:
-                    print u"Warning: %s" % unicode(e)
+                except fields.FieldDoesNotExist as e:
+                    print("Warning: %s" % str(e))
                     continue
                 field_value = se_parser.parse_value(col.text, field_type)
                 setattr(model_entry, field_name, field_value)
             model_entry.save()
             #transaction.commit()
-        print '... %d objects saved' % i
+        print('... %d objects saved' % i)
         sys.stdout.flush()
 
     def get_table_name(self, xml_file_basename):
@@ -939,15 +932,15 @@ it may be helpful to split this procedure in two:\n
                     u_openid.last_used_timestamp = se_u.last_login_date
                     u_openid.save()
                 except AssertionError:
-                    print u'User %s (id=%d) does not have openid' % \
-                            (unidecode(se_u.display_name), se_u.id)
+                    print('User %s (id=%d) does not have openid' % \
+                            (unidecode(se_u.display_name), se_u.id))
                     sys.stdout.flush()
                 except IntegrityError:
-                    print "Warning: have duplicate openid: %s" % se_u.open_id
+                    print("Warning: have duplicate openid: %s" % se_u.open_id)
                     sys.stdout.flush()
 
             if se_u.open_id is None and se_u.email is None:
-                print 'Warning: SE user %d is not recoverable (no email or openid)'
+                print('Warning: SE user %d is not recoverable (no email or openid)')
                 sys.stdout.flush()
 
             u.reputation = 1#se_u.reputation, it's actually re-computed
@@ -993,7 +986,7 @@ it may be helpful to split this procedure in two:\n
             #save the data
             try:
                 other = askbot.User.objects.get(username = u.username)
-                print 'alert - have a second user with name %s' % u.username
+                print('alert - have a second user with name %s' % u.username)
                 sys.sdtout.flush()
             except askbot.User.DoesNotExist:
                 pass

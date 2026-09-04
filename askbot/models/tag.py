@@ -2,8 +2,8 @@ import re
 from django.db import models
 from django.contrib.auth.models import User
 from django.utils.translation import get_language
-from django.utils.translation import ugettext as _
-from django.utils.translation import ugettext_lazy
+from django.utils.translation import gettext as _
+from django.utils.translation import gettext_lazy
 from django.conf import settings as django_settings
 from askbot.models.base import BaseQuerySetManager
 from askbot.models.fields import LanguageCodeField
@@ -258,7 +258,7 @@ class Tag(models.Model):
     STATUS_ACCEPTED = 1
 
     name = models.CharField(max_length=255)
-    created_by = models.ForeignKey(User, related_name='created_tags')
+    created_by = models.ForeignKey(User, related_name='created_tags', on_delete=models.CASCADE)
     language_code = LanguageCodeField()
     suggested_by = models.ManyToManyField(
         User, related_name='suggested_tags',
@@ -272,23 +272,24 @@ class Tag(models.Model):
 
     deleted     = models.BooleanField(default=False)
     deleted_at  = models.DateTimeField(null=True, blank=True)
-    deleted_by  = models.ForeignKey(User, null=True, blank=True, related_name='deleted_tags')
+    deleted_by  = models.ForeignKey(User, null=True, blank=True, related_name='deleted_tags', on_delete=models.CASCADE)
 
     tag_wiki = models.OneToOneField(
                                 'Post',
                                 null=True,
-                                related_name = 'described_tag'
+                                related_name = 'described_tag',
+                                on_delete=models.CASCADE
                             )
 
     objects = TagManager()
 
     class Meta:
         app_label = 'askbot'
-        db_table = u'tag'
+        db_table = 'tag'
         ordering = ('-used_count', 'name')
         unique_together = ('name', 'language_code')
 
-    def __unicode__(self):
+    def __str__(self):
         return self.name
 
     def decrement_used_count(self, delta=1):
@@ -297,12 +298,12 @@ class Tag(models.Model):
 
 class MarkedTag(models.Model):
     TAG_MARK_REASONS = (
-        ('good', ugettext_lazy('interesting')),
-        ('bad', ugettext_lazy('ignored')),
-        ('subscribed', ugettext_lazy('subscribed')),
+        ('good', gettext_lazy('interesting')),
+        ('bad', gettext_lazy('ignored')),
+        ('subscribed', gettext_lazy('subscribed')),
     )
-    tag = models.ForeignKey('Tag', related_name='user_selections')
-    user = models.ForeignKey(User, related_name='tag_selections')
+    tag = models.ForeignKey('Tag', related_name='user_selections', on_delete=models.CASCADE)
+    user = models.ForeignKey(User, related_name='tag_selections', on_delete=models.CASCADE)
     reason = models.CharField(max_length=16, choices=TAG_MARK_REASONS)
 
     class Meta:
@@ -314,7 +315,7 @@ class TagSynonym(models.Model):
     source_tag_name = models.CharField(max_length=255, unique=True)
     target_tag_name = models.CharField(max_length=255, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
-    owned_by = models.ForeignKey(User, related_name='tag_synonyms')
+    owned_by = models.ForeignKey(User, related_name='tag_synonyms', on_delete=models.CASCADE)
     auto_rename_count = models.IntegerField(default=0)
     last_auto_rename_at = models.DateTimeField(auto_now=True)
     language_code = LanguageCodeField()
@@ -322,5 +323,5 @@ class TagSynonym(models.Model):
     class Meta:
         app_label = 'askbot'
 
-    def __unicode__(self):
-        return u'%s -> %s' % (self.source_tag_name, self.target_tag_name)
+    def __str__(self):
+        return '%s -> %s' % (self.source_tag_name, self.target_tag_name)

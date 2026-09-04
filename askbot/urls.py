@@ -4,15 +4,17 @@ askbot url configuraion file
 import os.path
 from django.conf import settings
 from django.contrib import admin
-try:
-    from django.conf.urls import url, patterns, include
-except ImportError:
-    from django.conf.urls.defaults import url, patterns, include
+from django.urls import re_path, include
+from django.contrib.sitemaps import views as SitemapViews
+from django.views import static as StaticViews
+from django.views import i18n as I18nViews
 
 from askbot import views
 from askbot.feed import RssLastestQuestionsFeed, RssIndividualQuestionFeed
 from askbot.sitemap import QuestionsSitemap
+from askbot.utils.ratelimit import ratelimit_exempt, ratelimit_exempt_resolver
 from askbot.utils.url_utils import service_url
+import askbot.deps.django_authopenid.urls
 
 admin.autodiscover()
 #update_media_revision()#needs to be run once, so put it here
@@ -33,11 +35,15 @@ MAIN_PAGE_BASE_URL = settings.ASKBOT_MAIN_PAGE_BASE_URL
 QUESTION_PAGE_BASE_URL = settings.ASKBOT_QUESTION_PAGE_BASE_URL
 
 APP_PATH = os.path.dirname(__file__)
-urlpatterns = patterns(
-    '',
-    url(r'^$', views.readers.index, name='index'),
+
+livesettings_urls = ratelimit_exempt_resolver(
+    re_path(r'^settings/', include('livesettings.urls'))
+)
+
+urlpatterns = [
+    re_path(r'^$', views.readers.index, name='index'),
     # BEGIN Questions (main page) urls. All this urls work both normally and through ajax
-    url(
+    re_path(
         # Note that all parameters, even if optional, are provided to the view. Non-present ones have None value.
         (r'^%s' % MAIN_PAGE_BASE_URL.strip('/') +
             r'(%s)?' % r'/scope:(?P<scope>\w+)' +
@@ -51,37 +57,52 @@ urlpatterns = patterns(
         views.readers.questions,
         name='questions'
     ),
-    url(
+    re_path(
         r'^%s(?P<id>\d+)/' % QUESTION_PAGE_BASE_URL,
         views.readers.question,
         name='question'
     ),
-    url(
+    re_path(
         r'^%s$' % pgettext('urls', 'tags/'),
         views.readers.tags,
         name='tags'
     ),
-    url(
+    re_path(
+        r'^%s$' % pgettext('urls', 'search-posts/'),
+        views.readers.search_posts,
+        name='search_posts'
+    ),
+    re_path(
         r'^%s$' % pgettext('urls', 'users/'),
-        views.users.show_users,
+        views.users.users_list,
         name='users'
     ),
-    url(
+    re_path(
         r'^%s%s(?P<group_id>\d+)/(?P<group_slug>.*)/$' % (
                                             pgettext('urls', 'users/'),
                                             pgettext('urls', 'by-group/')
                                         ),
-        views.users.show_users,
+        views.users.users_list,
         kwargs={'by_group': True},
         name='users_by_group'
     ),
     # TODO: rename as user_edit, b/c that's how template is named
-    url(
+    re_path(
         r'^%s(?P<id>\d+)/%s$' % (pgettext('urls', 'users/'), pgettext('urls', 'edit/')),
         views.users.edit_user,
         name='edit_user'
     ),
-    service_url(  # ajax post only
+    service_url(
+        r'^%s(?P<id>\d+)/%s(?P<file_name>.+)/$' % (pgettext('urls', 'users/'), pgettext('urls', 'download-data/')),
+        views.users.download_user_data,
+        name='download_user_data'
+    ),
+    service_url(#ajax get only
+        r'^%s(?P<id>\d+)/%s$' % (pgettext('urls', 'users/'), pgettext('urls', 'get-todays-backup-file-name/')),
+        views.users.get_todays_backup_file_name,
+        name='get_todays_backup_file_name'
+    ),
+    service_url(#ajax post only
         r'^users/set-primary-language$',
         views.users.user_set_primary_language,
         name='user_set_primary_language'
@@ -96,7 +117,7 @@ urlpatterns = patterns(
         views.users.set_user_description,
         name='set_user_description',
     ),
-    url(
+    re_path(
         r'^%s(?P<id>\d+)/(?P<slug>.+)/%s$' % (
             pgettext('urls', 'users/'),
             pgettext('urls', 'subscriptions/'),
@@ -105,7 +126,7 @@ urlpatterns = patterns(
         kwargs={'tab_name': 'email_subscriptions'},
         name='user_subscriptions'
     ),
-    url(
+    re_path(
         r'^%s%s$' % (
             pgettext('urls', 'users/'),
             pgettext('urls', 'unsubscribe/'),
@@ -113,7 +134,7 @@ urlpatterns = patterns(
         views.users.user_unsubscribe,
         name='user_unsubscribe'
     ),
-    url(
+    re_path(
         r'^%s(?P<id>\d+)/(?P<slug>.+)/%s$' % (
             pgettext('urls', 'users/'),
             pgettext('urls', 'select_languages/'),
@@ -121,37 +142,37 @@ urlpatterns = patterns(
         views.users.user_select_languages,
         name='user_select_languages'
     ),
-    url(
+    re_path(
         r'^%s(?P<id>\d+)/(?P<slug>.+)/$' % pgettext('urls', 'users/'),
         views.users.user,
         name='user_profile'
     ),
-    url(
+    re_path(
         r'^%s$' % pgettext('urls', 'groups/'),
         views.users.groups,
         name='groups'
     ),
-    url(
+    re_path(
         r'^%s$' % pgettext('urls', 'badges/'),
-        views.meta.badges,
+        views.meta.badges_page,
         name='badges'
     ),
-    url(
-        r'^%s(?P<id>\d+)//*' % pgettext('urls', 'badges/'),
-        views.meta.badge,
+    re_path(
+        r'^%s(?P<badge_id>\d+)//*' % pgettext('urls', 'badges/'),
+        views.meta.badge_page,
         name='badge'
     ),
-    url(
+    re_path(
         r'^sitemap.xml$',
-        'django.contrib.sitemaps.views.sitemap',
+        SitemapViews.sitemap,
         {'sitemaps': sitemaps},
         name='sitemap'
     ),
     # feeds
-    url(r'^feeds/rss/$', RssLastestQuestionsFeed(), name="latest_questions_feed"),
-    url(r'^feeds/question/(?P<pk>\d+)/$', RssIndividualQuestionFeed(), name="individual_question_feed"),
-    url(r'^%s$' % pgettext('urls', 'feedback/'), views.meta.feedback, name='feedback'),
-    url(
+    re_path(r'^feeds/rss/$', RssLastestQuestionsFeed(), name="latest_questions_feed"),
+    re_path(r'^feeds/question/(?P<pk>\d+)/$', RssIndividualQuestionFeed(), name="individual_question_feed"),
+    re_path(r'^%s$' % pgettext('urls', 'feedback/'), views.meta.feedback, name='feedback'),
+    re_path(
         '^custom\.css$',
         views.meta.config_variable,
         kwargs={
@@ -160,7 +181,7 @@ urlpatterns = patterns(
         },
         name='custom_css'
     ),
-    url(
+    re_path(
         '^custom\.js$',
         views.meta.config_variable,
         kwargs={
@@ -172,22 +193,22 @@ urlpatterns = patterns(
     service_url(r'^translate-url/', views.commands.translate_url, name='translate_url'),
     service_url(r'^reorder-badges/', views.commands.reorder_badges, name='reorder_badges'),
     service_url(r'^import-data/$', views.writers.import_data, name='import_data'),
-    url(r'^%s$' % pgettext('urls', 'about/'), views.meta.about, name='about'),
-    url(r'^%s$' % pgettext('urls', 'faq/'), views.meta.faq, name='faq'),
-    url(r'^%s$' % pgettext('urls', 'privacy/'), views.meta.privacy, name='privacy'),
-    url(
+    re_path(r'%s' % pgettext('urls', 'about/'), views.meta.about, name='about'),
+    re_path(r'^%s$' % pgettext('urls', 'faq/'), views.meta.faq, name='faq'),
+    re_path(r'^%s$' % pgettext('urls', 'privacy/'), views.meta.privacy, name='privacy'),
+    re_path(
         r'^%s$' % pgettext('urls', 'terms/'),
         views.meta.markdown_flatpage,
         kwargs={'setting_name': 'TERMS', 'page_class': 'terms-page'},
         name='terms'
     ),
-    url(r'^%s$' % pgettext('urls', 'help/'), views.meta.help, name='help'),
+    re_path(r'^%s$' % pgettext('urls', 'help/'), views.meta.help_page, name='help'),
     service_url(
         r'^%s(?P<id>\d+)/%s$' % (pgettext('urls', 'answers/'), pgettext('urls', 'edit/')),
         views.writers.edit_answer,
         name='edit_answer'
     ),
-    url(
+    re_path(
         r'^%s(?P<id>\d+)/%s$' % (pgettext('urls', 'answers/'), pgettext('urls', 'revisions/')),
         views.readers.revisions,
         kwargs={'post_type': 'answer'},
@@ -219,7 +240,7 @@ urlpatterns = patterns(
         views.commands.moderate_group_join_request,
         name='moderate_group_join_request'
     ),
-    url(
+    re_path(
         r'^%s$' % pgettext('urls', 'moderation-queue/'),
         views.moderation.moderation_queue,
         name='moderation_queue'
@@ -284,28 +305,23 @@ urlpatterns = patterns(
         views.readers.get_post_html,
         name='get_post_html'
     ),
-    url(
+    re_path(
         r'^%s%s$' % (MAIN_PAGE_BASE_URL, pgettext('urls', 'ask/')),
         views.writers.ask,
         name='ask'
-    ),
-    url(
-        r'^%s(?P<id>\d+)/%s$' % (MAIN_PAGE_BASE_URL, pgettext('urls', 'edit/')),
-        views.writers.edit_question,
-        name='edit_question'
     ),
     service_url(  # this url is both regular and ajax
         r'^%s(?P<id>\d+)/%s$' % (MAIN_PAGE_BASE_URL, pgettext('urls', 'retag/')),
         views.writers.retag_question,
         name='retag_question'
     ),
-    url(
-        r'^%s(?P<id>\d+)/%s$' % (MAIN_PAGE_BASE_URL, pgettext('urls', 'close/')),
+    re_path(
+        r'^%s%s(?P<id>\d+)$' % (MAIN_PAGE_BASE_URL, pgettext('urls', 'close/')),
         views.commands.close,
         name='close'
     ),
-    url(
-        r'^%s(?P<id>\d+)/%s$' % (MAIN_PAGE_BASE_URL, pgettext('urls', 'reopen/')),
+    re_path(
+        r'^%s%s(?P<id>\d+)$' % (MAIN_PAGE_BASE_URL, pgettext('urls', 'reopen/')),
         views.commands.reopen,
         name='reopen'
     ),
@@ -319,12 +335,12 @@ urlpatterns = patterns(
         views.commands.merge_questions,
         name='merge_questions'
     ),
-    service_url(  # ajax only
+    service_url(# ajax only
         r'^vote$',
-        views.commands.vote,
+        views.commands.legacy_vote_view,
         name='vote'
     ),
-    url(
+    re_path(
         r'^%s(?P<id>\d+)/%s$' % (MAIN_PAGE_BASE_URL, pgettext('urls', 'revisions/')),
         views.readers.revisions,
         kwargs={'post_type': 'question'},
@@ -378,9 +394,9 @@ urlpatterns = patterns(
         name='repost_answer_as_comment_under_previous_answer'
     ),
     service_url(  # post only
-        r'^answer/publish/$',
-        views.commands.publish_answer,
-        name='publish_answer'
+        r'^publish-post/$',
+        views.commands.publish_post,
+        name='publish_post'
     ),
     service_url(
         r'^%s%s$' % (pgettext('urls', 'tags/'), pgettext('urls', 'subscriptions/')),
@@ -579,79 +595,6 @@ urlpatterns = patterns(
         views.commands.join_or_leave_group,
         name='join_or_leave_group'
     ),
-    # widgets url!
-    service_url(
-        r'^%s$' % (pgettext('urls', 'widgets/')),
-        views.widgets.widgets,
-        name='widgets'
-    ),
-    service_url(
-        r'^%s%s(?P<widget_id>\d+)/$' % (
-            pgettext('urls', 'widgets/'),
-            pgettext('urls', 'ask/')
-        ),
-        views.widgets.ask_widget,
-        name='ask_by_widget'
-    ),
-    service_url(
-        r'^%s%s(?P<widget_id>\d+).js$' % (
-            pgettext('urls', 'widgets/'),
-            pgettext('urls', 'ask/')
-        ),
-        views.widgets.render_ask_widget_js,
-        name='render_ask_widget'
-    ),
-    service_url(
-        r'^%s%s(?P<widget_id>\d+).css$' % (
-            pgettext('urls', 'widgets/'),
-            pgettext('urls', 'ask/')
-        ),
-        views.widgets.render_ask_widget_css,
-        name='render_ask_widget_css'
-    ),
-    service_url(
-        r'^%s%s%s$' % (
-            pgettext('urls', 'widgets/'),
-            pgettext('urls', 'ask/'),
-            pgettext('urls', 'complete/')
-        ),
-        views.widgets.ask_widget_complete,
-        name='ask_by_widget_complete'
-    ),
-    service_url(
-        r'^%s(?P<model>\w+)/%s$' % (
-            pgettext('urls', 'widgets/'),
-            pgettext('urls', 'create/')
-        ),
-        views.widgets.create_widget,
-        name='create_widget'
-    ),
-    service_url(
-        r'^%s(?P<model>\w+)/%s(?P<widget_id>\d+)/$' % (
-            pgettext('urls', 'widgets/'),
-            pgettext('urls', 'edit/')
-        ),
-        views.widgets.edit_widget,
-        name='edit_widget'
-    ),
-    service_url(
-        r'^%s(?P<model>\w+)/%s(?P<widget_id>\d+)/$' % (
-            pgettext('urls', 'widgets/'),
-            pgettext('urls', 'delete/')
-        ),
-        views.widgets.delete_widget,
-        name='delete_widget'
-    ),
-    service_url(
-        r'^%s(?P<model>\w+)/$' % (pgettext('urls', 'widgets/')),
-        views.widgets.list_widgets,
-        name='list_widgets'
-    ),
-    service_url(
-        r'^widgets/%s(?P<widget_id>\d+)/$' % MAIN_PAGE_BASE_URL,
-        views.widgets.question_widget,
-        name='question_widget'
-    ),
     service_url(
         r'^get-perms-data/$',
         views.readers.get_perms_data,
@@ -680,38 +623,50 @@ urlpatterns = patterns(
     ),
     service_url(
         r'^doc/(?P<path>.*)$',
-        'django.views.static.serve',
+        StaticViews.serve,
         {'document_root': os.path.join(APP_PATH, 'doc', 'build', 'html').replace('\\', '/')},
         name='askbot_docs',
     ),
     service_url(
+        # Exempt: page-load asset; a 429 here breaks JS i18n on every
+        # subsequent rendered page in the session.
         r'^jsi18n/$',
-        'django.views.i18n.javascript_catalog',
-        {'domain': 'djangojs', 'packages': ('askbot',)},
+        ratelimit_exempt(I18nViews.JavaScriptCatalog.as_view()),
+        {'domain': 'djangojs', 'packages': str.join('+',['askbot'])},
         name='askbot_jsi18n'
     ),
-    service_url(r'^private-messages/', include('askbot.deps.group_messaging.urls')),
-    url(r'^settings/', include('livesettings.urls')),
-    url(r'^preview-emails/$', views.emails.list_emails, name='list_emails'),
-    url(r'^preview-emails/(?P<slug>.+)/$', views.emails.preview_email, name='preview_email'),
+    re_path(r'^analytics/$', views.analytics_home.analytics_index, name='analytics_index'),
+    re_path(r'^analytics/users/(?P<users_segment>.+)/(?P<dates>.+)/$', views.analytics_users.analytics_users, name='analytics_users'),
+    re_path(r'^analytics/activity/(?P<activity_segment>.+)/(?P<content_segment>.+)/(?P<users_segment>.+)/(?P<dates>.+)/$', views.analytics.analytics_activity.analytics_activity, name='analytics_activity'),
+    livesettings_urls,
+    re_path(r'^preview-emails/$', views.emails.list_emails, name='list_emails'),
+    re_path(r'^preview-emails/(?P<slug>.+)/$', views.emails.preview_email, name='preview_email'),
 
-    url('^api/v1/info/$', views.api_v1.info, name='api_v1_info'),
-    url('^api/v1/users/$', views.api_v1.users, name='api_v1_users'),
-    url('^api/v1/users/(?P<user_id>\d+)/$', views.api_v1.user, name='api_v1_user'),
-    url('^api/v1/questions/$', views.api_v1.questions, name='api_v1_questions'),
-    url('^api/v1/questions/(?P<question_id>\d+)/$', views.api_v1.question, name='api_v1_question'),
-)
+    re_path('^api/v1/info/$', views.api_v1.info, name='api_v1_info'),
+    re_path('^api/v1/users/$', views.api_v1.users, name='api_v1_users'),
+    re_path('^api/v1/users/(?P<user_id>\d+)/$', views.api_v1.user, name='api_v1_user'),
+    re_path('^api/v1/questions/$', views.api_v1.questions, name='api_v1_questions'),
+    re_path('^api/v1/questions/(?P<question_id>\d+)/$', views.api_v1.question, name='api_v1_question'),
+    re_path('^api/v1/answers/(?P<answer_id>\d+)/$', views.api_v1.answer, name='api_v1_answer'),
+    re_path('^colors/', views.meta.colors, name='colors'),
+    service_url(
+        r'^verify-email-change/$',
+        views.users.verify_email_change,
+        name='verify_email_change'
+    ),
+]
 
 if 'askbot.deps.django_authopenid' in settings.INSTALLED_APPS:
-    urlpatterns += (
-        url(
+    urlpatterns.append(
+        re_path(
             r'^%s' % pgettext('urls', 'account/'),
-            include('askbot.deps.django_authopenid.urls')
-        ),
+            include(askbot.deps.django_authopenid.urls)
+        )
     )
 
 if 'avatar' in settings.INSTALLED_APPS:
-    urlpatterns += (
+    from avatar import views as AvatarViews
+    urlpatterns += [
         # avatar views are added here, because some need
         # either dynamic extra context or custom redirect
         # or extra parameter in the urls
@@ -737,7 +692,7 @@ if 'avatar' in settings.INSTALLED_APPS:
         ),
         service_url(  # this url is used without changes as in the avatar app
             '^avatar/render-primary/(?P<user>[\w\d\.\-_]+)/(?P<size>[\d]+)/$',
-            'avatar.views.render_primary',
+            AvatarViews.render_primary,
             name='avatar_render_primary'
         ),
         service_url(
@@ -750,4 +705,4 @@ if 'avatar' in settings.INSTALLED_APPS:
             views.avatar_views.enable_default_avatar,
             name='askbot_avatar_enable_default_avatar'
         )
-    )
+    ]

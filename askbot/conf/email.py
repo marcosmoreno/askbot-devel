@@ -1,22 +1,21 @@
 """
 Email related settings
 """
-from django.utils.translation import ugettext_lazy as _
-from django.utils.translation import string_concat
+from django.utils.translation import gettext_lazy as _
+from django.utils.text import format_lazy
 from django.conf import settings as django_settings
-
+from livesettings import values as livesettings
 from askbot.conf.settings_wrapper import settings
 from askbot.conf.super_groups import LOGIN_USERS_COMMUNICATION
-from askbot.deps import livesettings
 from askbot import const
 
 EMAIL_SUBJECT_PREFIX = getattr(django_settings, 'EMAIL_SUBJECT_PREFIX', '')
 
 EMAIL = livesettings.ConfigurationGroup(
-            'EMAIL',
-            _('Email and email alert settings'),
-            super_group=LOGIN_USERS_COMMUNICATION
-        )
+    'EMAIL',
+    _('Email and email alert settings'),
+    super_group=LOGIN_USERS_COMMUNICATION
+)
 
 settings.register(
     livesettings.StringValue(
@@ -25,10 +24,10 @@ settings.register(
         default=EMAIL_SUBJECT_PREFIX,
         description=_('Prefix for the email subject line'),
         help_text=_(
-                'This setting takes default from the django setting '
-                'EMAIL_SUBJECT_PREFIX. A value entered here will override '
-                'the default.'
-            )
+            'This setting takes default from the django setting '
+            'EMAIL_SUBJECT_PREFIX. A value entered here will override '
+            'the default.'
+        )
     )
 )
 
@@ -36,7 +35,7 @@ settings.register(
 def get_default_admin_email():
     try:
         return django_settings.ADMINS[0][1]
-    except:
+    except (AttributeError, IndexError):
         return ''
 
 settings.register(
@@ -45,6 +44,15 @@ settings.register(
         'ADMIN_EMAIL',
         default=get_default_admin_email(),
         description=_('Site administrator email address')
+    )
+)
+
+settings.register(
+    livesettings.StringValue(
+        EMAIL,
+        'FROM_EMAIL',
+        default=getattr(django_settings, 'DEFAULT_FROM_EMAIL', ''),
+        description=_('Notifications "From" email address'),
     )
 )
 
@@ -107,8 +115,8 @@ settings.register(
 settings.register(
     livesettings.BooleanValue(
         EMAIL,
-        'GROUP_MESSAGING_EMAIL_ALERT_ENABLED',
-        description=_('Enable private messaging alerts'),
+        'MODERATION_QUEUE_NOTIFICATION_ENABLED',
+        description=_('Enable moderation queue alerts'),
         default=True
     )
 )
@@ -116,9 +124,14 @@ settings.register(
 settings.register(
     livesettings.BooleanValue(
         EMAIL,
-        'MODERATION_QUEUE_NOTIFICATION_ENABLED',
-        description=_('Enable moderation queue alerts'),
-        default=True
+        'DEBUG_EMAIL_ALERTS',
+        default=False,
+        description=_('Log debug info for instant email alerts'),
+        help_text=_(
+            'When enabled, logs detailed information about email '
+            'notification processing at INFO level. '
+            'Use for production debugging.'
+        )
     )
 )
 
@@ -148,8 +161,6 @@ settings.register(
         default='w',
         choices=const.NOTIFICATION_DELIVERY_SCHEDULE_CHOICES,
         description=_('Default notification frequency all questions'),
-        help_text=_('Option to define frequency of emailed updates for: '
-                    'all questions.')
     )
 )
 
@@ -160,9 +171,7 @@ settings.register(
         default='i',
         choices=const.NOTIFICATION_DELIVERY_SCHEDULE_CHOICES,
         description=_('Default notification frequency questions asked by the '
-                      'user'),
-        help_text=_('Option to define frequency of emailed updates for: '
-                    'Question asked by the user.')
+                      'user')
     )
 )
 
@@ -173,9 +182,17 @@ settings.register(
         default='d',
         choices=const.NOTIFICATION_DELIVERY_SCHEDULE_CHOICES,
         description=_('Default notification frequency questions answered by '
-                      'the user'),
-        help_text=_('Option to define frequency of emailed updates for: '
-                    'Question answered by the user.')
+                      'the user')
+    )
+)
+
+settings.register(
+    livesettings.StringValue(
+        EMAIL,
+        'DEFAULT_NOTIFICATION_DELIVERY_SCHEDULE_Q_NOANS',
+        default='n',
+        choices=const.NOTIFICATION_DELIVERY_SCHEDULE_CHOICES_Q_NOANS,
+        description=_('Default notification frequency on unanswered questions')
     )
 )
 
@@ -185,10 +202,8 @@ settings.register(
         'DEFAULT_NOTIFICATION_DELIVERY_SCHEDULE_Q_SEL',
         default='i',
         choices=const.NOTIFICATION_DELIVERY_SCHEDULE_CHOICES,
-        description=_('Default notification frequency questions individually \
-                       selected by the user'),
-        help_text=_('Option to define frequency of emailed updates for: '
-                    'Question individually selected by the user.')
+        description=_('Default notification frequency questions individually'
+                      'selected by the user')
     )
 )
 
@@ -198,10 +213,8 @@ settings.register(
         'DEFAULT_NOTIFICATION_DELIVERY_SCHEDULE_M_AND_C',
         default='i',
         choices=const.NOTIFICATION_DELIVERY_SCHEDULE_CHOICES,
-        description=_('Default notification frequency for mentions \
-                       and comments'),
-        help_text=_('Option to define frequency of emailed updates for: '
-                    'Mentions and comments.')
+        description=_('Default notification frequency for mentions'
+                      'and comments')
     )
 )
 
@@ -316,11 +329,10 @@ settings.register(
         'BLANK_EMAIL_ALLOWED',
         default=False,
         description=_('Allow blank email'),
-        help_text=string_concat(
+        help_text=format_lazy('{} {}',
             _('DANGER: makes impossible account recovery by email.'),
-            ' ',
             settings.get_related_settings_info(
-                ('ACCESS_CONTROL', 'REQUIRE_VALID_EMAIL_FOR', True, _('Must be not be required')),
+                ('ACCESS_CONTROL', 'EMAIL_VALIDATION_REQUIRED', True, _('Must be disabled')),
             )
         )
     )
@@ -352,13 +364,10 @@ settings.register(
     livesettings.BooleanValue(
         EMAIL,
         'REPLY_BY_EMAIL',
-        default = False,
+        default=False,
         description=_('Enable posting and replying by email'),
         #TODO give a better explanation depending on lamson startup procedure
-        help_text=_(
-            'To enable this feature make sure lamson is running'
-
-        )
+        help_text=_('To enable this feature make sure lamson is running')
     )
 )
 
